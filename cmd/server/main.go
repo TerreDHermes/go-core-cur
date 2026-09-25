@@ -1,0 +1,31 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"cveanalysis/internal/app"
+	"cveanalysis/internal/config"
+)
+
+func main() {
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(log)
+
+	cfg, err := config.Load()
+	if err != nil {
+		log.Error("config", "err", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.Run(ctx, cfg, log); err != nil {
+		log.Error("shutdown", "err", err)
+		os.Exit(1)
+	}
+}
