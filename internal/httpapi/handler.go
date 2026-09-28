@@ -113,19 +113,45 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"id":            t.ID,
-		"status":        string(t.Status),
-		"component_url": t.ComponentURL,
-		"branch":        t.Branch,
-		"cve_id":        t.CVEID,
-		"package_name":  t.PackageName,
-		"verdict":       t.Verdict,
-		"report_md":     t.ReportMD,
-		"error_msg":     t.ErrorMsg,
-		"created_at":    t.CreatedAt,
-		"updated_at":    t.UpdatedAt,
+	modules := make([]moduleResponse, 0, len(t.Modules))
+	for _, m := range t.Modules {
+		modules = append(modules, moduleResponse{
+			GoModPath: m.GoModPath,
+			Verdict:   m.Verdict,
+			ReportMD:  m.ReportMD,
+		})
+	}
+	writeJSON(w, http.StatusOK, taskResponse{
+		ID:           t.ID,
+		Status:       string(t.Status),
+		ComponentURL: t.ComponentURL,
+		Branch:       t.Branch,
+		CVEID:        t.CVEID,
+		PackageName:  t.PackageName,
+		Modules:      modules,
+		ErrorMsg:     t.ErrorMsg,
+		CreatedAt:    t.CreatedAt,
+		UpdatedAt:    t.UpdatedAt,
 	})
+}
+
+type taskResponse struct {
+	ID           string           `json:"id"`
+	Status       string           `json:"status"`
+	ComponentURL string           `json:"component_url"`
+	Branch       string           `json:"branch"`
+	CVEID        string           `json:"cve_id"`
+	PackageName  string           `json:"package_name"`
+	Modules      []moduleResponse `json:"modules"`
+	ErrorMsg     string           `json:"error_msg"`
+	CreatedAt    string           `json:"created_at"`
+	UpdatedAt    string           `json:"updated_at"`
+}
+
+type moduleResponse struct {
+	GoModPath string `json:"go_mod_path"`
+	Verdict   string `json:"verdict"`
+	ReportMD  string `json:"report_md"`
 }
 
 func (h *Handler) report(w http.ResponseWriter, r *http.Request) {

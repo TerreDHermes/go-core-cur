@@ -49,8 +49,8 @@ func (s *Store) Create(ctx context.Context, t task.Task) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO analysis_tasks (
 			id, status, component_url, branch, cve_id, package_name,
-			verdict, report_md, error_msg, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+			error_msg, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 		t.ID, string(t.Status), t.ComponentURL, t.Branch, t.CVEID, t.PackageName,
 		t.CreatedAt, t.UpdatedAt,
 	)
@@ -75,15 +75,34 @@ func (s *Store) Claim(ctx context.Context, id, updatedAt string) (bool, error) {
 	return n == 1, nil
 }
 
-func (s *Store) Complete(ctx context.Context, id, verdict, report, updatedAt string) error {
-	res, err := s.db.ExecContext(ctx, `
+func (s *Store) Complete(ctx context.Context, id string, modules []task.ModuleResult, updatedAt string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin complete: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE analysis_tasks
-		SET status = 'COMPLETED', verdict = ?, report_md = ?, error_msg = NULL, updated_at = ?
-		WHERE id = ? AND status = 'RUNNING'`, verdict, report, updatedAt, id)
+		SET status = 'COMPLETED', error_msg = NULL, updated_at = ?
+		WHERE id = ? AND status = 'RUNNING'`, updatedAt, id)
 	if err != nil {
 		return fmt.Errorf("complete task: %w", err)
 	}
-	return rowsOne(res, "complete")
+	if err := rowsOne(res, "complete"); err != nil {
+		return err
+	}
+	for _, m := range modules {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO analysis_task_modules (task_id, go_mod_path, verdict, report_md)
+			VALUES (?, ?, ?, ?)`, id, m.GoModPath, m.Verdict, m.ReportMD); err != nil {
+			return fmt.Errorf("insert module result: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit complete: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Fail(ctx context.Context, id, errMsg, updatedAt string) error {
@@ -100,8 +119,7 @@ func (s *Store) Fail(ctx context.Context, id, errMsg, updatedAt string) error {
 func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, status, component_url, branch, cve_id, package_name,
-		       COALESCE(verdict, ''), COALESCE(report_md, ''), COALESCE(error_msg, ''),
-		       created_at, updated_at
+		       COALESCE(error_msg, ''), created_at, updated_at
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -110,13 +128,17 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 	if err != nil {
 		return task.Task{}, fmt.Errorf("get task: %w", err)
 	}
+	t.Modules, err = s.modules(ctx, id)
+	if err != nil {
+		return task.Task{}, err
+	}
 	return t, nil
 }
 
 func (s *Store) List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error) {
 	q := `
 		SELECT id, status, component_url, branch, cve_id, package_name,
-		       '', '', '', created_at, updated_at
+		       '', created_at, updated_at
 		FROM analysis_tasks`
 	var args []any
 	if status != "" {
@@ -175,13 +197,34 @@ func scanTask(row scanner) (task.Task, error) {
 	var status string
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
-		&t.Verdict, &t.ReportMD, &t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt,
+		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return task.Task{}, err
 	}
 	t.Status = task.Status(status)
 	return t, nil
+}
+
+func (s *Store) modules(ctx context.Context, taskID string) ([]task.ModuleResult, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT go_mod_path, verdict, report_md
+		FROM analysis_task_modules
+		WHERE task_id = ?
+		ORDER BY go_mod_path ASC`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("list module results: %w", err)
+	}
+	defer rows.Close()
+	out := []task.ModuleResult{}
+	for rows.Next() {
+		var m task.ModuleResult
+		if err := rows.Scan(&m.GoModPath, &m.Verdict, &m.ReportMD); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 func rowsOne(res sql.Result, op string) error {

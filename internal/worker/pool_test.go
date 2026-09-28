@@ -22,8 +22,12 @@ func (p pathClone) Remove(string) {}
 
 type staticScan struct{}
 
-func (staticScan) Scan(context.Context, scan.Input) (scan.Result, error) {
-	return scan.Result{Verdict: "found 1 go.mod", ReportMD: "./go.mod\n"}, nil
+func (staticScan) Scan(context.Context, scan.Input) ([]task.ModuleResult, error) {
+	return []task.ModuleResult{{
+		GoModPath: "./go.mod",
+		Verdict:   "pkg listed in ./go.mod",
+		ReportMD:  "./go.mod\n",
+	}}, nil
 }
 
 func TestWorkerCompletesClaimedTask(t *testing.T) {
@@ -50,7 +54,7 @@ func TestWorkerCompletesClaimedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != task.StatusCompleted || got.ReportMD != "./go.mod\n" {
+	if got.Status != task.StatusCompleted || len(got.Modules) != 1 || got.Modules[0].ReportMD != "./go.mod\n" {
 		t.Fatalf("%+v", got)
 	}
 

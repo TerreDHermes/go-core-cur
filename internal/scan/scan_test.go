@@ -8,31 +8,39 @@ import (
 	"testing"
 )
 
-func TestScanFindsGoMod(t *testing.T) {
+func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/root\n")
-	mustWrite(t, filepath.Join(root, "sub", "go.mod"), "module example.com/sub\n")
-	mustWrite(t, filepath.Join(root, ".git", "go.mod"), "ignored\n")
-	mustWrite(t, filepath.Join(root, "README.md"), "nope\n")
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/root\n\nrequire github.com/foo/bar v1.2.3\n")
+	mustWrite(t, filepath.Join(root, "sub", "go.mod"), "module example.com/sub\n\nrequire github.com/other/pkg v0.1.0\n")
+	mustWrite(t, filepath.Join(root, "tools", "go.mod"), "module example.com/tools\n\nrequire github.com/foo/bar v1.2.3\n")
+	mustWrite(t, filepath.Join(root, ".git", "go.mod"), "require github.com/foo/bar v1.2.3\n")
 
-	res, err := Scan(context.Background(), Input{
+	got, err := Scan(context.Background(), Input{
 		RepoPath:     root,
 		ComponentURL: "https://example.com/repo",
 		Branch:       "main",
 		CVEID:        "CVE-2024-1",
-		PackageName:  "example",
+		PackageName:  "github.com/foo/bar",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Verdict != "found 2 go.mod" {
-		t.Fatalf("verdict %q", res.Verdict)
+	if len(got) != 2 {
+		t.Fatalf("got %d results: %+v", len(got), got)
 	}
-	if !strings.Contains(res.ReportMD, "./go.mod\n") || !strings.Contains(res.ReportMD, "./sub/go.mod\n") {
-		t.Fatalf("report:\n%s", res.ReportMD)
+	if got[0].GoModPath != "./go.mod" || got[1].GoModPath != "./tools/go.mod" {
+		t.Fatalf("%+v", got)
 	}
-	if strings.Contains(res.ReportMD, ".git") {
-		t.Fatalf("git dir leaked:\n%s", res.ReportMD)
+	if !strings.Contains(got[0].Verdict, "github.com/foo/bar listed in ./go.mod") {
+		t.Fatal(got[0].Verdict)
+	}
+	if !strings.Contains(got[0].ReportMD, "require github.com/foo/bar v1.2.3") {
+		t.Fatal(got[0].ReportMD)
+	}
+	for _, m := range got {
+		if strings.Contains(m.GoModPath, ".git") || strings.Contains(m.ReportMD, "example.com/sub") {
+			t.Fatalf("unexpected module: %+v", m)
+		}
 	}
 }
 

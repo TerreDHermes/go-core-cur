@@ -23,14 +23,15 @@ func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, error) 
 	return []task.Task{{
 		ID: "1", Status: task.StatusPending, CVEID: "CVE-1",
 		ComponentURL: "https://example.com/r", Branch: "main", PackageName: "pkg",
-		CreatedAt: "2026-01-01T00:00:00Z", Verdict: "hidden", ReportMD: "hidden",
+		CreatedAt: "2026-01-01T00:00:00Z",
+		Modules:   []task.ModuleResult{{GoModPath: "./go.mod", Verdict: "hidden", ReportMD: "hidden"}},
 	}}, nil
 }
 func (f fakeSvc) Get(context.Context, string) (task.Task, error) {
 	return task.Task{
 		ID: "1", Status: task.StatusCompleted, CVEID: "CVE-1",
 		ComponentURL: "https://example.com/r", Branch: "main", PackageName: "pkg",
-		Verdict: "found 1 go.mod", ReportMD: "./go.mod\n",
+		Modules:   []task.ModuleResult{{GoModPath: "./go.mod", Verdict: "found", ReportMD: "./go.mod\n"}},
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:01Z",
 	}, nil
 }

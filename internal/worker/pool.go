@@ -8,6 +8,7 @@ import (
 
 	"cveanalysis/internal/scan"
 	"cveanalysis/internal/store"
+	"cveanalysis/internal/task"
 )
 
 type Cloner interface {
@@ -16,7 +17,7 @@ type Cloner interface {
 }
 
 type Scanner interface {
-	Scan(ctx context.Context, in scan.Input) (scan.Result, error)
+	Scan(ctx context.Context, in scan.Input) ([]task.ModuleResult, error)
 }
 
 type Pool struct {
@@ -139,7 +140,7 @@ func (p *Pool) handle(id string) {
 		return
 	}
 
-	result, err := p.scan.Scan(ctx, scan.Input{
+	modules, err := p.scan.Scan(ctx, scan.Input{
 		RepoPath:     dir,
 		ComponentURL: t.ComponentURL,
 		Branch:       t.Branch,
@@ -150,11 +151,11 @@ func (p *Pool) handle(id string) {
 		p.fail(id, err)
 		return
 	}
-	if err := p.store.Complete(context.Background(), id, result.Verdict, result.ReportMD, p.stamp()); err != nil {
+	if err := p.store.Complete(context.Background(), id, modules, p.stamp()); err != nil {
 		log.Error("complete task", "err", err)
 		return
 	}
-	log.Info("task completed", "verdict", result.Verdict)
+	log.Info("task completed", "modules", len(modules))
 }
 
 func (p *Pool) fail(id string, err error) {

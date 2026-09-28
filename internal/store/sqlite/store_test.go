@@ -28,14 +28,19 @@ func TestClaimIsAtomic(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("second claim ok=%v err=%v", ok, err)
 	}
-	if err := st.Complete(ctx, item.ID, "found 1 go.mod", "./go.mod\n", "2026-01-01T00:00:03Z"); err != nil {
+	modules := []task.ModuleResult{{
+		GoModPath: "./go.mod",
+		Verdict:   "pkg listed in ./go.mod",
+		ReportMD:  "# ./go.mod\n",
+	}}
+	if err := st.Complete(ctx, item.ID, modules, "2026-01-01T00:00:03Z"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.Get(ctx, item.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != task.StatusCompleted || got.Verdict != "found 1 go.mod" || got.ReportMD != "./go.mod\n" {
+	if got.Status != task.StatusCompleted || len(got.Modules) != 1 || got.Modules[0].GoModPath != "./go.mod" {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -65,7 +70,7 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	if len(all) != 2 || all[0].ID != "b" || all[1].ID != "a" {
 		t.Fatalf("%+v", all)
 	}
-	if all[0].ErrorMsg != "" || all[0].Verdict != "" {
+	if all[0].ErrorMsg != "" || len(all[0].Modules) != 0 {
 		t.Fatalf("list leaked fields: %+v", all[0])
 	}
 	pending, err := st.ListPendingIDs(ctx)

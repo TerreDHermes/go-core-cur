@@ -92,5 +92,5 @@ func (s *Service) Report(ctx context.Context, id string) (cveID, markdown string
 	if t.Status != task.StatusCompleted {
 		return "", "", task.ErrNotCompleted
 	}
-	return t.CVEID, t.ReportMD, nil
+	return t.CVEID, t.CombinedReport(), nil
 }

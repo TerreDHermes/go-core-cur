@@ -1,6 +1,9 @@
 package task
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 type Status string
 
@@ -27,11 +30,18 @@ type Task struct {
 	Branch       string
 	CVEID        string
 	PackageName  string
-	Verdict      string
-	ReportMD     string
 	ErrorMsg     string
 	CreatedAt    string
 	UpdatedAt    string
+	Modules      []ModuleResult
+}
+
+// ModuleResult is the outcome for one go.mod that lists PackageName.
+// A task has one entry per such file, and none for go.mod files that do not mention the package.
+type ModuleResult struct {
+	GoModPath string
+	Verdict   string
+	ReportMD  string
 }
 
 type CreateInput struct {
@@ -39,6 +49,25 @@ type CreateInput struct {
 	Branch       string
 	CVEID        string
 	PackageName  string
+}
+
+// CombinedReport joins every module report into one markdown document.
+// An empty list means the scan finished and the package was not listed anywhere.
+func (t Task) CombinedReport() string {
+	if len(t.Modules) == 0 {
+		return "Package not found in any go.mod.\n"
+	}
+	var b strings.Builder
+	for i, m := range t.Modules {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(m.ReportMD)
+		if !strings.HasSuffix(m.ReportMD, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }
 
 var (
