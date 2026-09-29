@@ -13,6 +13,7 @@ type Config struct {
 	WorkerCount int
 	GitTimeout  time.Duration
 	QueueSize   int
+	GitToken    string
 }
 
 func Load() (Config, error) {
@@ -22,6 +23,7 @@ func Load() (Config, error) {
 		WorkerCount: 2,
 		GitTimeout:  2 * time.Minute,
 		QueueSize:   128,
+		GitToken:    os.Getenv("GIT_TOKEN"),
 	}
 
 	if v := os.Getenv("WORKER_COUNT"); v != "" {
