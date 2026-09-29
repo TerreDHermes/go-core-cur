@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/joho/godotenv"
+
 	"cveanalysis/internal/app"
 	"cveanalysis/internal/config"
 )
@@ -14,6 +16,10 @@ import (
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(log)
+
+	if err := godotenv.Load(); err != nil {
+		log.Info("no .env file, using environment")
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
