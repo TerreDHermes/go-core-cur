@@ -31,7 +31,7 @@ func TestClaimIsAtomic(t *testing.T) {
 	modules := []task.ModuleResult{{
 		GoModPath: "./go.mod",
 		Verdict:   "pkg listed in ./go.mod",
-		ReportMD:  "# ./go.mod\n",
+		ReportMD:  task.Report{GoModPath: "./go.mod", HasVendor: true, VendorPath: "./vendor"},
 	}}
 	if err := st.Complete(ctx, item.ID, modules, "2026-01-01T00:00:03Z"); err != nil {
 		t.Fatal(err)

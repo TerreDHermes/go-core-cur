@@ -41,7 +41,7 @@ type Task struct {
 type ModuleResult struct {
 	GoModPath string
 	Verdict   string
-	ReportMD  string
+	ReportMD  Report
 }
 
 type CreateInput struct {
@@ -62,8 +62,9 @@ func (t Task) CombinedReport() string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(m.ReportMD)
-		if !strings.HasSuffix(m.ReportMD, "\n") {
+		text := m.ReportMD.Markdown()
+		b.WriteString(text)
+		if !strings.HasSuffix(text, "\n") {
 			b.WriteByte('\n')
 		}
 	}

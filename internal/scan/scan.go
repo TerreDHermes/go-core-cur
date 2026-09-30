@@ -20,9 +20,14 @@ type Input struct {
 	PackageName  string
 }
 
+// PatchSource loads the CVE patch document. Scan calls it once per matching go.mod.
+type PatchSource interface {
+	Fetch(ctx context.Context, cveID string) (task.CVEPatch, error)
+}
+
 // Scan reads every go.mod in the cloned tree. A go.mod becomes a ModuleResult
 // only when it lists PackageName. Files that do not mention the package are skipped.
-func Scan(ctx context.Context, in Input) ([]task.ModuleResult, error) {
+func Scan(ctx context.Context, in Input, patches PatchSource) ([]task.ModuleResult, error) {
 	var paths []string
 	err := filepath.WalkDir(in.RepoPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -61,29 +66,42 @@ func Scan(ctx context.Context, in Input) ([]task.ModuleResult, error) {
 		if len(lines) == 0 {
 			continue
 		}
+		if patches == nil {
+			return nil, fmt.Errorf("cve patch source is not configured")
+		}
+		patch, err := patches.Fetch(ctx, in.CVEID)
+		if err != nil {
+			return nil, fmt.Errorf("cve patch for %s: %w", rel, err)
+		}
 		goModPath := "./" + rel
+		hasVendor, vendorPath := vendorBeside(in.RepoPath, rel)
 		found = append(found, task.ModuleResult{
 			GoModPath: goModPath,
 			Verdict:   fmt.Sprintf("%s listed in %s", in.PackageName, goModPath),
-			ReportMD:  moduleReport(in, goModPath, lines),
+			ReportMD: task.Report{
+				GoModPath:     goModPath,
+				HasVendor:     hasVendor,
+				VendorPath:    vendorPath,
+				MatchingLines: lines,
+				Patch:         patch,
+			},
 		})
 	}
 	return found, nil
 }
 
-func moduleReport(in Input, goModPath string, lines []string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", goModPath)
-	fmt.Fprintf(&b, "- CVE: `%s`\n", in.CVEID)
-	fmt.Fprintf(&b, "- Package: `%s`\n", in.PackageName)
-	fmt.Fprintf(&b, "- Repository: `%s`\n", in.ComponentURL)
-	fmt.Fprintf(&b, "- Branch: `%s`\n\n", in.Branch)
-	b.WriteString("Matching lines:\n\n")
-	for _, line := range lines {
-		b.WriteString(line)
-		b.WriteByte('\n')
+func vendorBeside(repoPath, rel string) (bool, string) {
+	modDir := filepath.Dir(filepath.Join(repoPath, filepath.FromSlash(rel)))
+	vendorAbs := filepath.Join(modDir, "vendor")
+	info, err := os.Stat(vendorAbs)
+	if err != nil || !info.IsDir() {
+		return false, ""
 	}
-	return b.String()
+	relVendor, err := filepath.Rel(repoPath, vendorAbs)
+	if err != nil {
+		return true, ""
+	}
+	return true, "./" + filepath.ToSlash(relVendor)
 }
 
 func matchingLines(content, pkg string) []string {

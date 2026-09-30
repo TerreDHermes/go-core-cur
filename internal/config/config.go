@@ -8,22 +8,24 @@ import (
 )
 
 type Config struct {
-	HTTPAddr    string
-	SQLitePath  string
-	WorkerCount int
-	GitTimeout  time.Duration
-	QueueSize   int
-	GitToken    string
+	HTTPAddr     string
+	SQLitePath   string
+	WorkerCount  int
+	GitTimeout   time.Duration
+	QueueSize    int
+	GitToken     string
+	CVEPatchBase string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:    env("HTTP_ADDR", ":8741"),
-		SQLitePath:  env("SQLITE_PATH", "data/analysis.db"),
-		WorkerCount: 2,
-		GitTimeout:  2 * time.Minute,
-		QueueSize:   128,
-		GitToken:    os.Getenv("GIT_TOKEN"),
+		HTTPAddr:     env("HTTP_ADDR", ":8741"),
+		SQLitePath:   env("SQLITE_PATH", "data/analysis.db"),
+		WorkerCount:  2,
+		GitTimeout:   2 * time.Minute,
+		QueueSize:    128,
+		GitToken:     os.Getenv("GIT_TOKEN"),
+		CVEPatchBase: env("CVE_PATCH_BASE", "http://d49.dev.k8s:8080"),
 	}
 
 	if v := os.Getenv("WORKER_COUNT"); v != "" {

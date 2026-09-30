@@ -6,8 +6,10 @@ import (
 	"cveanalysis/internal/task"
 )
 
-type Client struct{}
+type Client struct {
+	Patches PatchSource
+}
 
-func (Client) Scan(ctx context.Context, in Input) ([]task.ModuleResult, error) {
-	return Scan(ctx, in)
+func (c Client) Scan(ctx context.Context, in Input) ([]task.ModuleResult, error) {
+	return Scan(ctx, in, c.Patches)
 }

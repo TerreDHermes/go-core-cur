@@ -23,6 +23,7 @@ go run ./cmd/server
 | `WORKER_COUNT` | `2` | Число воркеров |
 | `GIT_TIMEOUT` | `2m` | Таймаут clone и поиска |
 | `GIT_TOKEN` | пусто | Токен для приватного HTTPS-репозитория. Без него чужой приватный репозиторий отвечает 403 |
+| `CVE_PATCH_BASE` | `http://d49.dev.k8s:8080` | База ручки `GET /cve/patch/{cve_id}` |
 
 ## API
 

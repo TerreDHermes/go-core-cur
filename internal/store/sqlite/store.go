@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -93,9 +94,13 @@ func (s *Store) Complete(ctx context.Context, id string, modules []task.ModuleRe
 		return err
 	}
 	for _, m := range modules {
+		raw, err := json.Marshal(m.ReportMD)
+		if err != nil {
+			return fmt.Errorf("encode report: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO analysis_task_modules (task_id, go_mod_path, verdict, report_md)
-			VALUES (?, ?, ?, ?)`, id, m.GoModPath, m.Verdict, m.ReportMD); err != nil {
+			VALUES (?, ?, ?, ?)`, id, m.GoModPath, m.Verdict, string(raw)); err != nil {
 			return fmt.Errorf("insert module result: %w", err)
 		}
 	}
@@ -219,8 +224,14 @@ func (s *Store) modules(ctx context.Context, taskID string) ([]task.ModuleResult
 	out := []task.ModuleResult{}
 	for rows.Next() {
 		var m task.ModuleResult
-		if err := rows.Scan(&m.GoModPath, &m.Verdict, &m.ReportMD); err != nil {
+		var raw string
+		if err := rows.Scan(&m.GoModPath, &m.Verdict, &raw); err != nil {
 			return nil, err
+		}
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &m.ReportMD); err != nil {
+				return nil, fmt.Errorf("decode report: %w", err)
+			}
 		}
 		out = append(out, m)
 	}

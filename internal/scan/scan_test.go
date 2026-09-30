@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"cveanalysis/internal/task"
 )
 
 func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
@@ -14,6 +16,9 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "sub", "go.mod"), "module example.com/sub\n\nrequire github.com/other/pkg v0.1.0\n")
 	mustWrite(t, filepath.Join(root, "tools", "go.mod"), "module example.com/tools\n\nrequire github.com/foo/bar v1.2.3\n")
 	mustWrite(t, filepath.Join(root, ".git", "go.mod"), "require github.com/foo/bar v1.2.3\n")
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := Scan(context.Background(), Input{
 		RepoPath:     root,
@@ -21,7 +26,7 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 		Branch:       "main",
 		CVEID:        "CVE-2024-1",
 		PackageName:  "github.com/foo/bar",
-	})
+	}, fakePatch{cve: "CVE-2024-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,14 +39,31 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 	if !strings.Contains(got[0].Verdict, "github.com/foo/bar listed in ./go.mod") {
 		t.Fatal(got[0].Verdict)
 	}
-	if !strings.Contains(got[0].ReportMD, "require github.com/foo/bar v1.2.3") {
-		t.Fatal(got[0].ReportMD)
+	if len(got[0].ReportMD.MatchingLines) != 1 || !strings.Contains(got[0].ReportMD.MatchingLines[0], "github.com/foo/bar") {
+		t.Fatal(got[0].ReportMD.MatchingLines)
+	}
+	if !got[0].ReportMD.HasVendor || got[0].ReportMD.VendorPath != "./vendor" {
+		t.Fatalf("root vendor: %+v", got[0].ReportMD)
+	}
+	if got[1].ReportMD.HasVendor {
+		t.Fatalf("tools should not have vendor: %+v", got[1].ReportMD)
+	}
+	if got[0].ReportMD.Patch.CVE != "CVE-2024-1" || !strings.Contains(got[0].ReportMD.Markdown(), "Vendor: yes") {
+		t.Fatal(got[0].ReportMD.Markdown())
 	}
 	for _, m := range got {
-		if strings.Contains(m.GoModPath, ".git") || strings.Contains(m.ReportMD, "example.com/sub") {
+		if strings.Contains(m.GoModPath, ".git") {
 			t.Fatalf("unexpected module: %+v", m)
 		}
 	}
+}
+
+type fakePatch struct {
+	cve string
+}
+
+func (f fakePatch) Fetch(context.Context, string) (task.CVEPatch, error) {
+	return task.CVEPatch{CVE: f.cve, Files: []task.PatchFile{{Filename: "a.go", Patch: "diff"}}}, nil
 }
 
 func mustWrite(t *testing.T, path, body string) {
