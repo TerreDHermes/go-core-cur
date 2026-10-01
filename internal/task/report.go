@@ -8,12 +8,22 @@ import (
 
 // Report is the per-go.mod document. Fields stay separate for later use.
 // Markdown renders the same data as one string for the download endpoint.
+const (
+	StageNotGo         = "not_go"
+	StagePackageAbsent = "package_absent"
+	StageNoVendor      = "no_vendor"
+	StageNoPatch       = "no_patch"
+	StagePatchFiles    = "patch_files"
+)
+
 type Report struct {
-	GoModPath     string   `json:"go_mod_path"`
-	HasVendor     bool     `json:"has_vendor"`
-	VendorPath    string   `json:"vendor_path,omitempty"`
-	MatchingLines []string `json:"matching_lines"`
-	Patch         CVEPatch `json:"patch"`
+	GoModPath       string   `json:"go_mod_path"`
+	Stage           string   `json:"stage"`
+	HasVendor       bool     `json:"has_vendor"`
+	VendorPath      string   `json:"vendor_path,omitempty"`
+	MatchingLines   []string `json:"matching_lines"`
+	FoundPatchFiles []string `json:"found_patch_files,omitempty"`
+	Patch           CVEPatch `json:"patch"`
 }
 
 // CVEPatch is the body of GET /cve/patch/{cveID}.
@@ -69,10 +79,21 @@ func (p CVEPatch) NeedsPatchRetry() bool {
 func (r Report) Markdown() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", r.GoModPath)
+	if r.Stage != "" {
+		fmt.Fprintf(&b, "Stage: `%s`\n\n", r.Stage)
+	}
 	if r.HasVendor {
 		fmt.Fprintf(&b, "Vendor: yes (`%s`)\n\n", r.VendorPath)
 	} else {
 		b.WriteString("Vendor: no\n\n")
+	}
+	if len(r.FoundPatchFiles) > 0 {
+		b.WriteString("Patch files found:\n\n")
+		for _, path := range r.FoundPatchFiles {
+			b.WriteString(path)
+			b.WriteByte('\n')
+		}
+		b.WriteByte('\n')
 	}
 	b.WriteString("Matching lines:\n\n")
 	if len(r.MatchingLines) == 0 {
