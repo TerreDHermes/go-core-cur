@@ -18,7 +18,20 @@ func verdictPrompt(in Input, report task.Report) string {
 Объяснение возьми только из отчёта. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.
 Достижимость вызовов ещё не проверялась: если файл патча найден, уязвимый код в дереве есть; если все файлы патча отмечены false, уязвимого кода нет.`
 	opening := verdictOpening(in, report)
-	if report.Grep != nil {
+	if report.Reach != nil && report.Reach.Reachable != nil {
+		if *report.Reach.Reachable {
+			rules = `Файлы патча есть в дереве, и deadcode нашёл путь от main до уязвимой функции.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
+Уязвимый код достижим. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
+		} else {
+			rules = `Файлы патча есть в дереве, но deadcode не нашёл пути от main до уязвимой функции.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
+Уязвимый код недостижим, уязвимости в этой сборке нет. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
+		}
+		opening = reachOpening(in, report, *report.Reach.Reachable)
+	} else if report.Grep != nil {
 		rules = `Патча нет. Реши по полю grep, применима уязвимость или нет.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с одного из двух вариантов ниже и сразу продолжи после «Все дело в том, что».
@@ -35,6 +48,25 @@ func verdictPrompt(in Input, report task.Report) string {
 Отчёт:
 %s
 `, rules, opening, raw)
+}
+
+func reachOpening(in Input, report task.Report, reachable bool) string {
+	name := componentName(in.ComponentURL)
+	label := cveLabel(in.CVEID, report.Patch.Aliases)
+	version := report.Version
+	if version == "" {
+		version = "неизвестна"
+	}
+	switch {
+	case report.FromRoot && reachable:
+		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s": файлы патча есть в репозитории и уязвимая функция достижима из main. Все дело в том, что`, label, name)
+	case report.FromRoot:
+		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": файлы патча есть, но уязвимый код недостижим из main. Все дело в том, что`, label, name)
+	case reachable:
+		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s", так как используется зависимость "%s" версии "%s", файлы патча найдены и уязвимая функция достижима из main. Все дело в том, что`, label, name, in.PackageName, version)
+	default:
+		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s", хоть и используется зависимость "%s" версии "%s" и файлы патча найдены: уязвимый код недостижим из main. Все дело в том, что`, label, name, in.PackageName, version)
+	}
 }
 
 func grepChoice(in Input, report task.Report) string {

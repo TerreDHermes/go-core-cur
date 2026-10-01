@@ -68,12 +68,12 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		found = append(found, analyzeModule(in, patch, mod))
+		found = append(found, analyzeModule(ctx, in, patch, mod))
 	}
 	return withGrep(ctx, in.RepoPath, in, patch, explain, found)
 }
 
-func analyzeModule(in Input, patch task.CVEPatch, mod matchedModule) task.ModuleResult {
+func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod matchedModule) task.ModuleResult {
 	report := task.Report{
 		GoModPath:     mod.GoModPath,
 		HasVendor:     mod.HasVendor,
@@ -102,9 +102,14 @@ func analyzeModule(in Input, patch task.CVEPatch, mod matchedModule) task.Module
 	report.Stage = task.StagePatchFiles
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
+	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles)
+	if patchFileFound(report) {
+		report.Reach = analyzeReach(ctx, in.RepoPath, patch.Files, report.PatchFiles)
+		verdict += reachFacts(report.Reach)
+	}
 	return task.ModuleResult{
 		GoModPath: mod.GoModPath,
-		Verdict:   verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles),
+		Verdict:   verdict,
 		ReportMD:  report,
 	}
 }
@@ -137,9 +142,14 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	report.Stage = task.StagePatchFiles
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
+	verdict := verdictRootPatchFiles(report.FoundPatchFiles)
+	if patchFileFound(report) {
+		report.Reach = analyzeReach(ctx, in.RepoPath, patch.Files, report.PatchFiles)
+		verdict += reachFacts(report.Reach)
+	}
 	return finish(ctx, in, []task.ModuleResult{{
 		GoModPath: ".",
-		Verdict:   verdictRootPatchFiles(report.FoundPatchFiles),
+		Verdict:   verdict,
 		ReportMD:  report,
 	}}, explain)
 }

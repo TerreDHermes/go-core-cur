@@ -28,7 +28,26 @@ type Report struct {
 	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
 	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
 	Grep            *GrepReport      `json:"grep,omitempty"`
+	Reach           *ReachReport     `json:"reach,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
+}
+
+// ReachReport is the deadcode result for functions touched by a patch that is present in the tree.
+// Reachable is omitted when the tool did not answer; false is never used for a failed run.
+type ReachReport struct {
+	Tool      string      `json:"tool"`
+	Reachable *bool       `json:"reachable,omitempty"`
+	Detail    string      `json:"detail,omitempty"`
+	Functions []ReachFunc `json:"functions"`
+}
+
+// ReachFunc is one function taken from the patch and checked with deadcode -whylive.
+type ReachFunc struct {
+	Symbol string `json:"symbol"`
+	File   string `json:"file"`
+	Text   string `json:"text,omitempty"`
+	Status string `json:"status"`
+	Output string `json:"output,omitempty"`
 }
 
 // GrepReport is the no-patch search: phrases chosen from the description
@@ -171,6 +190,30 @@ func (r Report) Markdown() string {
 		}
 		if r.Grep.ExcerptsTruncated {
 			b.WriteString("Grep excerpts truncated: yes\n\n")
+		}
+	}
+	if r.Reach != nil {
+		b.WriteString("Reachability:\n\n")
+		if r.Reach.Reachable == nil {
+			b.WriteString("reachable: unknown\n\n")
+		} else if *r.Reach.Reachable {
+			b.WriteString("reachable: true\n\n")
+		} else {
+			b.WriteString("reachable: false\n\n")
+		}
+		if r.Reach.Detail != "" {
+			fmt.Fprintf(&b, "%s\n\n", r.Reach.Detail)
+		}
+		for _, fn := range r.Reach.Functions {
+			fmt.Fprintf(&b, "- `%s` (%s) in `%s`\n", fn.Symbol, fn.Status, fn.File)
+			if fn.Text != "" {
+				b.WriteString("\n```\n")
+				b.WriteString(fn.Text)
+				if !strings.HasSuffix(fn.Text, "\n") {
+					b.WriteByte('\n')
+				}
+				b.WriteString("```\n\n")
+			}
 		}
 	}
 	if len(r.PatchFiles) > 0 {
