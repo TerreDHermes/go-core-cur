@@ -40,6 +40,7 @@ func findGoMods(ctx context.Context, repoPath string) ([]string, error) {
 type matchedModule struct {
 	GoModPath  string
 	Lines      []string
+	Version    string
 	HasVendor  bool
 	VendorPath string
 	VendorAbs  string
@@ -63,6 +64,7 @@ func modulesWithPackage(ctx context.Context, in Input, paths []string) ([]matche
 		matched = append(matched, matchedModule{
 			GoModPath:  "./" + rel,
 			Lines:      lines,
+			Version:    moduleVersion(string(body), in.PackageName),
 			HasVendor:  hasVendor,
 			VendorPath: vendorPath,
 			VendorAbs:  vendorAbs,

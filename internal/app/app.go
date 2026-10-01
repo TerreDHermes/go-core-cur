@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"cveanalysis/internal/ai"
 	"cveanalysis/internal/config"
 	"cveanalysis/internal/cveapi"
 	"cveanalysis/internal/gitrepo"
@@ -32,7 +33,10 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	defer st.Close()
 
-	pool := worker.New(st, gitrepo.Client{Token: cfg.GitToken}, scan.Client{Patches: cveapi.New(cfg.CVEPatchBase)}, cfg.WorkerCount, cfg.QueueSize, cfg.GitTimeout, log)
+	pool := worker.New(st, gitrepo.Client{Token: cfg.GitToken}, scan.Client{
+		Patches: cveapi.New(cfg.CVEPatchBase),
+		AI:      ai.NewAIClient(cfg.AIBaseURL, cfg.AIToken, cfg.AIModel),
+	}, cfg.WorkerCount, cfg.QueueSize, cfg.GitTimeout, log)
 	svc := tasksvc.New(st, pool)
 
 	mux := http.NewServeMux()

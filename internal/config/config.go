@@ -15,6 +15,9 @@ type Config struct {
 	QueueSize    int
 	GitToken     string
 	CVEPatchBase string
+	AIBaseURL    string
+	AIToken      string
+	AIModel      string
 }
 
 func Load() (Config, error) {
@@ -26,6 +29,9 @@ func Load() (Config, error) {
 		QueueSize:    128,
 		GitToken:     os.Getenv("GIT_TOKEN"),
 		CVEPatchBase: env("CVE_PATCH_BASE", "http://d49.dev.k8s:8080"),
+		AIBaseURL:    os.Getenv("AI_BASE_URL"),
+		AIToken:      os.Getenv("AI_TOKEN"),
+		AIModel:      os.Getenv("AI_MODEL"),
 	}
 
 	if v := os.Getenv("WORKER_COUNT"); v != "" {

@@ -23,6 +23,8 @@ type Report struct {
 	HasVendor       bool             `json:"has_vendor"`
 	VendorPath      string           `json:"vendor_path,omitempty"`
 	MatchingLines   []string         `json:"matching_lines"`
+	Version         string           `json:"version,omitempty"`
+	PreVerdict      string           `json:"pre_verdict,omitempty"`
 	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
 	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
@@ -103,6 +105,12 @@ func (r Report) Markdown() string {
 		fmt.Fprintf(&b, "Vendor: yes (`%s`)\n\n", r.VendorPath)
 	} else {
 		b.WriteString("Vendor: no\n\n")
+	}
+	if r.Version != "" {
+		fmt.Fprintf(&b, "Version: `%s`\n\n", r.Version)
+	}
+	if r.PreVerdict != "" {
+		fmt.Fprintf(&b, "Pre-verdict: %s\n\n", r.PreVerdict)
 	}
 	if len(r.PatchFiles) > 0 {
 		b.WriteString("Patch files:\n\n")
