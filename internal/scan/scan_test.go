@@ -358,7 +358,7 @@ func TestGrepIsWordMatchAndBounded(t *testing.T) {
 	mustWrite(t, filepath.Join(root, ".git", "config"), "HostID\n")
 	mustWrite(t, filepath.Join(root, "bin.dat"), "HostID\x00more\n")
 
-	hits, truncated, err := grepRepo(context.Background(), root, []string{"HostID", "UniqueToken", "OtherToken"})
+	hits, _, truncated, _, err := grepRepo(context.Background(), root, []string{"HostID", "UniqueToken", "OtherToken"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,6 +384,39 @@ func TestGrepIsWordMatchAndBounded(t *testing.T) {
 	}
 	if host != 1 || unique != maxHitsPerPattern || other != 1 {
 		t.Fatalf("host %d unique %d other %d hits %+v", host, unique, other, hits)
+	}
+}
+
+func TestExcerptKeepsEnclosingFunction(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "host.go"), `package resource
+
+func Other() {
+	println("other")
+}
+
+func HostID() string {
+	id := readMachineID()
+	return id
+}
+
+func Tail() {
+	println("tail")
+}
+`)
+	_, excerpts, _, excerptsTruncated, err := grepRepo(context.Background(), root, []string{"readMachineID"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if excerptsTruncated || len(excerpts) != 1 {
+		t.Fatalf("%+v", excerpts)
+	}
+	text := excerpts[0].Text
+	if !strings.Contains(text, "func HostID") || !strings.Contains(text, "return id") {
+		t.Fatal(text)
+	}
+	if strings.Contains(text, "func Other") || strings.Contains(text, "func Tail") {
+		t.Fatal(text)
 	}
 }
 
@@ -421,8 +454,11 @@ func TestScanGrepsWhenPatchIsMissing(t *testing.T) {
 	if len(ai.prompts) != 2 || !strings.Contains(ai.prompts[0], "grep -rwn") {
 		t.Fatalf("prompts %d", len(ai.prompts))
 	}
-	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "HostID") {
+	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "func HostID") {
 		t.Fatal(ai.prompts[1])
+	}
+	if len(got[0].ReportMD.Grep.Excerpts) != 1 || !strings.Contains(got[0].ReportMD.Grep.Excerpts[0].Text, "func HostID") {
+		t.Fatal(got[0].ReportMD.Grep.Excerpts)
 	}
 	if !strings.Contains(got[0].ReportMD.Markdown(), "Grep truncated") && got[0].ReportMD.Grep.Truncated {
 		t.Fatal(got[0].ReportMD.Markdown())

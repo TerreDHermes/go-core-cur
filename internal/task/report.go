@@ -34,9 +34,11 @@ type Report struct {
 // GrepReport is the no-patch search: phrases chosen from the description
 // and a bounded list of matches. The bound keeps the later model call small.
 type GrepReport struct {
-	Patterns  []string  `json:"patterns"`
-	Hits      []GrepHit `json:"hits"`
-	Truncated bool      `json:"truncated"`
+	Patterns          []string      `json:"patterns"`
+	Hits              []GrepHit     `json:"hits"`
+	Excerpts          []GrepExcerpt `json:"excerpts"`
+	Truncated         bool          `json:"truncated"`
+	ExcerptsTruncated bool          `json:"excerpts_truncated"`
 }
 
 // GrepHit is one grep -rwn style match.
@@ -45,6 +47,15 @@ type GrepHit struct {
 	Path    string `json:"path"`
 	Line    int    `json:"line"`
 	Text    string `json:"text"`
+}
+
+// GrepExcerpt is a bounded slice of the file around a grep hit.
+// For Go it prefers the enclosing function. Later hits in the same slice do not copy it again.
+type GrepExcerpt struct {
+	Path string `json:"path"`
+	From int    `json:"from"`
+	To   int    `json:"to"`
+	Text string `json:"text"`
 }
 
 // PatchFileMatch is one file from the CVE patch.
@@ -147,7 +158,20 @@ func (r Report) Markdown() string {
 		if r.Grep.Truncated {
 			b.WriteString("\nGrep truncated: yes\n")
 		}
-		b.WriteByte('\n')
+		b.WriteString("\nGrep excerpts:\n\n")
+		if len(r.Grep.Excerpts) == 0 {
+			b.WriteString("(none)\n\n")
+		}
+		for _, excerpt := range r.Grep.Excerpts {
+			fmt.Fprintf(&b, "`%s` lines %d-%d\n\n```\n%s", excerpt.Path, excerpt.From, excerpt.To, excerpt.Text)
+			if !strings.HasSuffix(excerpt.Text, "\n") {
+				b.WriteByte('\n')
+			}
+			b.WriteString("```\n\n")
+		}
+		if r.Grep.ExcerptsTruncated {
+			b.WriteString("Grep excerpts truncated: yes\n\n")
+		}
 	}
 	if len(r.PatchFiles) > 0 {
 		b.WriteString("Patch files:\n\n")
