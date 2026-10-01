@@ -263,11 +263,6 @@ type captureAI struct {
 	prompts []string
 }
 
-func (c *captureAI) Explain(_ context.Context, prompt string) (string, error) {
-	c.prompts = append(c.prompts, prompt)
-	return "model-verdict", nil
-}
-
 type failAI struct{}
 
 func (failAI) Explain(context.Context, string) (string, error) {
@@ -341,6 +336,135 @@ func TestScanPromptTemplates(t *testing.T) {
 	if !strings.Contains(ai.prompts[0], `неприменима к компоненту "alertmanager", хоть и используется зависимость "go.opentelemetry.io/otel/sdk" версии "v1.43.0"`) {
 		t.Fatal(ai.prompts[0])
 	}
+}
+
+func TestParseKeywordsKeepsFiveGrepPhrases(t *testing.T) {
+	got := parseKeywords("1. HostID\n- readMachineID\n`otel resource`\nxx\nHostID\nbonus one\nbonus two\n")
+	want := []string{"HostID", "readMachineID", "otel resource", "bonus one", "bonus two"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatal(got)
+	}
+}
+
+func TestGrepIsWordMatchAndBounded(t *testing.T) {
+	root := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < 6; i++ {
+		fmt.Fprintf(&b, "UniqueToken %d\n", i)
+	}
+	b.WriteString("OtherToken\n")
+	b.WriteString("HostIDExtra\n")
+	mustWrite(t, filepath.Join(root, "lib.go"), "func HostID() {}\n"+b.String())
+	mustWrite(t, filepath.Join(root, ".git", "config"), "HostID\n")
+	mustWrite(t, filepath.Join(root, "bin.dat"), "HostID\x00more\n")
+
+	hits, truncated, err := grepRepo(context.Background(), root, []string{"HostID", "UniqueToken", "OtherToken"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	var host, unique, other int
+	for _, hit := range hits {
+		if strings.Contains(hit.Path, ".git") || strings.Contains(hit.Text, "HostIDExtra") || hit.Path == "./bin.dat" {
+			t.Fatal(hit)
+		}
+		switch hit.Pattern {
+		case "HostID":
+			host++
+			if hit.Path != "./lib.go" || hit.Line != 1 {
+				t.Fatal(hit)
+			}
+		case "UniqueToken":
+			unique++
+		case "OtherToken":
+			other++
+		}
+	}
+	if host != 1 || unique != maxHitsPerPattern || other != 1 {
+		t.Fatalf("host %d unique %d other %d hits %+v", host, unique, other, hits)
+	}
+}
+
+func TestScanGrepsWhenPatchIsMissing(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/alertmanager\n\nrequire go.opentelemetry.io/otel/sdk v1.43.0\n")
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "sdk", "resource", "host.go"), "package resource\n\nfunc HostID() {}\n")
+	mustWrite(t, filepath.Join(root, ".git", "config"), "HostID\n")
+
+	ai := &captureAI{}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://github.com/prometheus/alertmanager",
+		CVEID:        "CVE-2026-24051",
+		PackageName:  "go.opentelemetry.io/otel/sdk",
+	}, describedPatch{}, ai)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ReportMD.Stage != task.StageNoPatch || got[0].ReportMD.Grep == nil {
+		t.Fatalf("%+v", got)
+	}
+	if strings.Join(got[0].ReportMD.Grep.Patterns, ",") != "HostID,readMachineID" {
+		t.Fatal(got[0].ReportMD.Grep.Patterns)
+	}
+	if len(got[0].ReportMD.Grep.Hits) != 1 || got[0].ReportMD.Grep.Hits[0].Path != "./sdk/resource/host.go" {
+		t.Fatal(got[0].ReportMD.Grep.Hits)
+	}
+	if !strings.Contains(got[0].ReportMD.PreVerdict, "HostID, readMachineID") || !strings.Contains(got[0].ReportMD.PreVerdict, "Совпадений сохранено: 1") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
+	}
+	if len(ai.prompts) != 2 || !strings.Contains(ai.prompts[0], "grep -rwn") {
+		t.Fatalf("prompts %d", len(ai.prompts))
+	}
+	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "HostID") {
+		t.Fatal(ai.prompts[1])
+	}
+	if !strings.Contains(got[0].ReportMD.Markdown(), "Grep truncated") && got[0].ReportMD.Grep.Truncated {
+		t.Fatal(got[0].ReportMD.Markdown())
+	}
+	if !strings.Contains(got[0].ReportMD.Markdown(), "`HostID`") {
+		t.Fatal(got[0].ReportMD.Markdown())
+	}
+}
+
+func TestScanGrepsWithoutVendorWhenPatchIsMissing(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire github.com/foo/bar v1.2.3\n")
+	mustWrite(t, filepath.Join(root, "main.go"), "package main\n\nfunc HostID() {}\n")
+	got, err := Scan(context.Background(), Input{
+		RepoPath:    root,
+		CVEID:       "CVE-1",
+		PackageName: "github.com/foo/bar",
+	}, describedPatch{}, &captureAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ReportMD.Stage != task.StageNoVendor || got[0].ReportMD.Grep == nil || len(got[0].ReportMD.Grep.Hits) != 1 {
+		t.Fatalf("%+v", got[0].ReportMD)
+	}
+}
+
+type describedPatch struct{}
+
+func (describedPatch) Fetch(context.Context, string) (task.CVEPatch, error) {
+	return task.CVEPatch{
+		CVE:           "CVE-2026-24051",
+		Description:   "HostID is derived from a machine identifier.",
+		DescriptionRU: "Идентификатор хоста строится из readMachineID.",
+	}, nil
+}
+
+func (c *captureAI) Explain(_ context.Context, prompt string) (string, error) {
+	c.prompts = append(c.prompts, prompt)
+	if strings.Contains(prompt, "grep -rwn") {
+		return "HostID\nreadMachineID\n", nil
+	}
+	return "model-verdict", nil
 }
 
 func TestScanFailsWhenAIFails(t *testing.T) {

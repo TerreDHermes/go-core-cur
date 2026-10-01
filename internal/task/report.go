@@ -27,7 +27,24 @@ type Report struct {
 	PreVerdict      string           `json:"pre_verdict,omitempty"`
 	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
 	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
+	Grep            *GrepReport      `json:"grep,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
+}
+
+// GrepReport is the no-patch search: phrases chosen from the description
+// and a bounded list of matches. The bound keeps the later model call small.
+type GrepReport struct {
+	Patterns  []string  `json:"patterns"`
+	Hits      []GrepHit `json:"hits"`
+	Truncated bool      `json:"truncated"`
+}
+
+// GrepHit is one grep -rwn style match.
+type GrepHit struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Text    string `json:"text"`
 }
 
 // PatchFileMatch is one file from the CVE patch.
@@ -111,6 +128,26 @@ func (r Report) Markdown() string {
 	}
 	if r.PreVerdict != "" {
 		fmt.Fprintf(&b, "Pre-verdict: %s\n\n", r.PreVerdict)
+	}
+	if r.Grep != nil {
+		b.WriteString("Grep patterns:\n\n")
+		if len(r.Grep.Patterns) == 0 {
+			b.WriteString("(none)\n")
+		}
+		for _, pattern := range r.Grep.Patterns {
+			fmt.Fprintf(&b, "- `%s`\n", pattern)
+		}
+		b.WriteString("\nGrep hits:\n\n")
+		if len(r.Grep.Hits) == 0 {
+			b.WriteString("(none)\n")
+		}
+		for _, hit := range r.Grep.Hits {
+			fmt.Fprintf(&b, "- `%s` %s:%d: %s\n", hit.Pattern, hit.Path, hit.Line, hit.Text)
+		}
+		if r.Grep.Truncated {
+			b.WriteString("\nGrep truncated: yes\n")
+		}
+		b.WriteByte('\n')
 	}
 	if len(r.PatchFiles) > 0 {
 		b.WriteString("Patch files:\n\n")

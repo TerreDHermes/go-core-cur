@@ -32,8 +32,9 @@ type Explainer interface {
 
 // Scan chooses one branch of the analysis and does not perform the branch itself.
 // Package "root" looks for patch files from the repository root.
-// Any other package stops a module early when it has no vendor or the patch has no files.
+// Any other package stops a module early when it has no vendor and the patch has files.
 // A module with a vendor directory and a patch continues into the patch steps.
+// An empty patch asks the model for five grep phrases, searches the tree, and stores both.
 // The deterministic text stays in Report.PreVerdict. Explain replaces Verdict.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
 	if in.PackageName == rootPackage {
@@ -59,7 +60,7 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		return nil, err
 	}
 	if len(matched) == 0 {
-		return finish(ctx, in, []task.ModuleResult{packageAbsent(in, patch)}, explain)
+		return withGrep(ctx, in.RepoPath, in, patch, explain, []task.ModuleResult{packageAbsent(in, patch)})
 	}
 
 	var found []task.ModuleResult
@@ -69,7 +70,7 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		}
 		found = append(found, analyzeModule(in, patch, mod))
 	}
-	return finish(ctx, in, found, explain)
+	return withGrep(ctx, in.RepoPath, in, patch, explain, found)
 }
 
 func analyzeModule(in Input, patch task.CVEPatch, mod matchedModule) task.ModuleResult {
@@ -126,11 +127,11 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	}
 	if len(patch.Files) == 0 {
 		report.Stage = task.StageNoPatch
-		return finish(ctx, in, []task.ModuleResult{{
+		return withGrep(ctx, in.RepoPath, in, patch, explain, []task.ModuleResult{{
 			GoModPath: ".",
 			Verdict:   verdictRootNoPatch(),
 			ReportMD:  report,
-		}}, explain)
+		}})
 	}
 	matches := locateRootPatchFiles(in.RepoPath, patch.Files)
 	report.Stage = task.StagePatchFiles

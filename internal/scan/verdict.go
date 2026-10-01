@@ -29,13 +29,13 @@ func packageAbsent(in Input, patch task.CVEPatch) task.ModuleResult {
 func verdictNoVendor(in Input, goModPath string, patchMissing bool) string {
 	verdict := fmt.Sprintf("Пакет %s действительно есть в %s. Но рядом директории vendor нет. В связи с этим, анализ для текущего go.mod завершен - без vendor анализ невозможен.", in.PackageName, goModPath)
 	if patchMissing {
-		verdict += " И, к сожалению, даже патч не найден (в будущем будет внедрен анализ ситуаций, когда патча нет, но пока такие дела...)"
+		verdict += " Патч тоже не найден."
 	}
 	return verdict
 }
 
 func verdictNoPatch(in Input, goModPath string) string {
-	return fmt.Sprintf("Пакет %s действительно есть в %s. И рядом с ним лежит директория vendor. Но, к сожалению, патч не найден. А это значит, что анализ завершен (в будущем будет внедрен анализ ситуаций, когда патча нет, но пока такие дела...)", in.PackageName, goModPath)
+	return fmt.Sprintf("Пакет %s действительно есть в %s. И рядом с ним лежит директория vendor. Но патч не найден.", in.PackageName, goModPath)
 }
 
 func verdictPatchFiles(in Input, goModPath string, found []string) string {
@@ -47,7 +47,19 @@ func verdictPatchFiles(in Input, goModPath string, found []string) string {
 }
 
 func verdictRootNoPatch() string {
-	return "Пакет указан как root, поэтому go.mod не искался. Анализ идёт от корня репозитория. Но патч не найден. А это значит, что анализ завершен (в будущем будет внедрен анализ ситуаций, когда патча нет, но пока такие дела...)"
+	return "Пакет указан как root, поэтому go.mod не искался. Анализ идёт от корня репозитория. Но патч не найден."
+}
+
+func grepFacts(g task.GrepReport) string {
+	list := strings.Join(g.Patterns, ", ")
+	if list == "" {
+		list = "(фразы не выделены)"
+	}
+	text := fmt.Sprintf("Для поиска по проекту выбраны фразы: %s. Совпадений сохранено: %d.", list, len(g.Hits))
+	if g.Truncated {
+		text += " Список совпадений обрезан до фиксированного размера."
+	}
+	return text
 }
 
 func verdictRootPatchFiles(found []string) string {
