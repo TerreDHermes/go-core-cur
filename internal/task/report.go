@@ -17,13 +17,24 @@ const (
 )
 
 type Report struct {
-	GoModPath       string   `json:"go_mod_path"`
-	Stage           string   `json:"stage"`
-	HasVendor       bool     `json:"has_vendor"`
-	VendorPath      string   `json:"vendor_path,omitempty"`
-	MatchingLines   []string `json:"matching_lines"`
-	FoundPatchFiles []string `json:"found_patch_files,omitempty"`
-	Patch           CVEPatch `json:"patch"`
+	GoModPath       string           `json:"go_mod_path"`
+	Stage           string           `json:"stage"`
+	FromRoot        bool             `json:"from_root,omitempty"`
+	HasVendor       bool             `json:"has_vendor"`
+	VendorPath      string           `json:"vendor_path,omitempty"`
+	MatchingLines   []string         `json:"matching_lines"`
+	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
+	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
+	Patch           CVEPatch         `json:"patch"`
+}
+
+// PatchFileMatch is one file from the CVE patch.
+// Found is true when that file exists in this module's tree, false when it does not.
+// Every patch file is listed. All false means none of the patch files are in the project.
+type PatchFileMatch struct {
+	Filename string `json:"filename"`
+	Found    bool   `json:"found"`
+	Path     string `json:"path,omitempty"`
 }
 
 // CVEPatch is the body of GET /cve/patch/{cveID}.
@@ -78,20 +89,29 @@ func (p CVEPatch) NeedsPatchRetry() bool {
 // Markdown assembles every saved field into one document.
 func (r Report) Markdown() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", r.GoModPath)
+	title := r.GoModPath
+	if r.FromRoot {
+		title = "root"
+	}
+	fmt.Fprintf(&b, "# %s\n\n", title)
 	if r.Stage != "" {
 		fmt.Fprintf(&b, "Stage: `%s`\n\n", r.Stage)
 	}
-	if r.HasVendor {
+	if r.FromRoot {
+		b.WriteString("Search: repository root\n\n")
+	} else if r.HasVendor {
 		fmt.Fprintf(&b, "Vendor: yes (`%s`)\n\n", r.VendorPath)
 	} else {
 		b.WriteString("Vendor: no\n\n")
 	}
-	if len(r.FoundPatchFiles) > 0 {
-		b.WriteString("Patch files found:\n\n")
-		for _, path := range r.FoundPatchFiles {
-			b.WriteString(path)
-			b.WriteByte('\n')
+	if len(r.PatchFiles) > 0 {
+		b.WriteString("Patch files:\n\n")
+		for _, file := range r.PatchFiles {
+			if file.Found {
+				fmt.Fprintf(&b, "- `%s`: true (`%s`)\n", file.Filename, file.Path)
+				continue
+			}
+			fmt.Fprintf(&b, "- `%s`: false\n", file.Filename)
 		}
 		b.WriteByte('\n')
 	}

@@ -46,6 +46,18 @@ func verdictPatchFiles(in Input, goModPath string, found []string) string {
 	return verdict + " В vendor найдены файлы патча: " + strings.Join(found, ", ") + "."
 }
 
+func verdictRootNoPatch() string {
+	return "Пакет указан как root, поэтому go.mod не искался. Анализ идёт от корня репозитория. Но патч не найден. А это значит, что анализ завершен (в будущем будет внедрен анализ ситуаций, когда патча нет, но пока такие дела...)"
+}
+
+func verdictRootPatchFiles(found []string) string {
+	verdict := "Пакет указан как root, поэтому go.mod не искался. Файлы патча искались от корня репозитория."
+	if len(found) == 0 {
+		return verdict + " Ни один файл патча в корне не найден."
+	}
+	return verdict + " В корне найдены файлы патча: " + strings.Join(found, ", ") + "."
+}
+
 func formatAliases(ids []string, cveID string) string {
 	var aliases string
 	for _, id := range ids {
