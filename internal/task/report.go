@@ -25,11 +25,21 @@ type Report struct {
 	MatchingLines   []string         `json:"matching_lines"`
 	Version         string           `json:"version,omitempty"`
 	PreVerdict      string           `json:"pre_verdict,omitempty"`
+	DevNotes        *DevNotes        `json:"dev_notes,omitempty"`
 	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
 	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
 	Grep            *GrepReport      `json:"grep,omitempty"`
 	Reach           *ReachReport     `json:"reach,omitempty"`
+	Narrative       string           `json:"narrative,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
+}
+
+// DevNotes is the text of dapp/README.md when that file exists in the clone.
+// A nil pointer means the file was not there and the step was skipped.
+type DevNotes struct {
+	Path      string `json:"path"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // ReachReport is the deadcode result for functions touched by a patch that is present in the tree.
@@ -53,6 +63,8 @@ type ReachFunc struct {
 // GrepReport is the no-patch search: phrases chosen from the description
 // and a bounded list of matches. The bound keeps the later model call small.
 type GrepReport struct {
+	// Source is "patch" when the phrases come from the diff and "description" when the model took them from the CVE text.
+	Source            string        `json:"source,omitempty"`
 	Patterns          []string      `json:"patterns"`
 	Hits              []GrepHit     `json:"hits"`
 	Excerpts          []GrepExcerpt `json:"excerpts"`
@@ -146,6 +158,12 @@ func (r Report) Markdown() string {
 	if r.Stage != "" {
 		fmt.Fprintf(&b, "Stage: `%s`\n\n", r.Stage)
 	}
+	if r.DevNotes != nil {
+		fmt.Fprintf(&b, "Developer notes (`%s`):\n\n%s\n\n", r.DevNotes.Path, r.DevNotes.Text)
+		if r.DevNotes.Truncated {
+			b.WriteString("Developer notes truncated: yes\n\n")
+		}
+	}
 	if r.FromRoot {
 		b.WriteString("Search: repository root\n\n")
 	} else if r.HasVendor {
@@ -160,6 +178,9 @@ func (r Report) Markdown() string {
 		fmt.Fprintf(&b, "Pre-verdict: %s\n\n", r.PreVerdict)
 	}
 	if r.Grep != nil {
+		if r.Grep.Source != "" {
+			fmt.Fprintf(&b, "Grep source: `%s`\n\n", r.Grep.Source)
+		}
 		b.WriteString("Grep patterns:\n\n")
 		if len(r.Grep.Patterns) == 0 {
 			b.WriteString("(none)\n")
@@ -244,4 +265,13 @@ func (r Report) Markdown() string {
 	b.Write(raw)
 	b.WriteByte('\n')
 	return b.String()
+}
+
+// PublicText is the analysis journal the API and the download return.
+// Older rows have no narrative, so the structured markdown is used instead.
+func (r Report) PublicText() string {
+	if strings.TrimSpace(r.Narrative) != "" {
+		return strings.TrimSpace(r.Narrative) + "\n"
+	}
+	return r.Markdown()
 }

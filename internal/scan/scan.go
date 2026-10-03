@@ -25,27 +25,33 @@ type PatchSource interface {
 // relative to that repository, so go.mod and vendor are not consulted.
 const rootPackage = "root"
 
-// Explainer writes the final verdict from a prepared prompt.
+// Explainer writes the final verdict and the analysis journal.
 type Explainer interface {
 	Explain(ctx context.Context, prompt string) (string, error)
 }
 
 // Scan chooses one branch of the analysis and does not perform the branch itself.
+// dapp/README.md is read first when that file exists.
 // Package "root" looks for patch files from the repository root.
+// A repository with no go.mod is not treated as finished: the patch is fetched and the tree is grepped.
 // Any other package stops a module early when it has no vendor and the patch has files.
 // A module with a vendor directory and a patch continues into the patch steps.
 // An empty patch asks the model for five grep phrases, searches the tree, and stores both.
-// The deterministic text stays in Report.PreVerdict. Explain replaces Verdict.
+// The deterministic text stays in Report.PreVerdict. Explain replaces Verdict and fills Narrative.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
+	notes, err := loadDevNotes(in.RepoPath)
+	if err != nil {
+		return nil, err
+	}
 	if in.PackageName == rootPackage {
-		return scanRoot(ctx, in, patches, explain)
+		return scanRoot(ctx, in, patches, explain, notes)
 	}
 	paths, err := findGoMods(ctx, in.RepoPath)
 	if err != nil {
 		return nil, err
 	}
 	if len(paths) == 0 {
-		return finish(ctx, in, []task.ModuleResult{notGo()}, explain)
+		return scanNotGo(ctx, in, patches, explain, notes)
 	}
 	if patches == nil {
 		return nil, fmt.Errorf("cve patch source is not configured")
@@ -60,7 +66,7 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		return nil, err
 	}
 	if len(matched) == 0 {
-		return withGrep(ctx, in.RepoPath, in, patch, explain, []task.ModuleResult{packageAbsent(in, patch)})
+		return withGrep(ctx, in.RepoPath, in, patch, explain, notes, []task.ModuleResult{packageAbsent(in, patch)})
 	}
 
 	var found []task.ModuleResult
@@ -70,7 +76,48 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		}
 		found = append(found, analyzeModule(ctx, in, patch, mod))
 	}
-	return withGrep(ctx, in.RepoPath, in, patch, explain, found)
+	return withGrep(ctx, in.RepoPath, in, patch, explain, notes, found)
+}
+
+func scanNotGo(ctx context.Context, in Input, patches PatchSource, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if patches == nil {
+		return nil, fmt.Errorf("cve patch source is not configured")
+	}
+	patch, err := patches.Fetch(ctx, in.CVEID)
+	if err != nil {
+		return nil, fmt.Errorf("cve patch for: %w", err)
+	}
+	result := task.ModuleResult{
+		GoModPath: "-",
+		ReportMD:  task.Report{Stage: task.StageNotGo, Patch: patch},
+	}
+	var ev *grepEvidence
+	if len(patch.Files) > 0 {
+		ev, err = patchTreeGrep(ctx, in.RepoPath, patch)
+		if err != nil {
+			return nil, err
+		}
+		if ev == nil {
+			ev, err = descriptionGrep(ctx, in.RepoPath, patch, explain)
+			if err != nil {
+				return nil, err
+			}
+			result.Verdict = verdictNotGo(len(patch.Files), false)
+		} else {
+			result.Verdict = verdictNotGo(len(patch.Files), true)
+		}
+	} else {
+		ev, err = descriptionGrep(ctx, in.RepoPath, patch, explain)
+		if err != nil {
+			return nil, err
+		}
+		result.Verdict = verdictNotGo(0, false)
+	}
+	applyGrep(&result, ev)
+	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 
 func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod matchedModule) task.ModuleResult {
@@ -114,7 +161,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	}
 }
 
-func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
+func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -132,7 +179,7 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	}
 	if len(patch.Files) == 0 {
 		report.Stage = task.StageNoPatch
-		return withGrep(ctx, in.RepoPath, in, patch, explain, []task.ModuleResult{{
+		return withGrep(ctx, in.RepoPath, in, patch, explain, notes, []task.ModuleResult{{
 			GoModPath: ".",
 			Verdict:   verdictRootNoPatch(),
 			ReportMD:  report,
@@ -151,13 +198,14 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 		GoModPath: ".",
 		Verdict:   verdict,
 		ReportMD:  report,
-	}}, explain)
+	}}, explain, notes)
 }
 
-func finish(ctx context.Context, in Input, results []task.ModuleResult, explain Explainer) ([]task.ModuleResult, error) {
+func finish(ctx context.Context, in Input, results []task.ModuleResult, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
 	if explain == nil {
 		return nil, fmt.Errorf("ai client is not configured")
 	}
+	attachNotes(results, notes)
 	for i := range results {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -172,6 +220,15 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 			return nil, fmt.Errorf("ai verdict for %s is empty", results[i].GoModPath)
 		}
 		results[i].Verdict = text
+		narrative, err := explain.Explain(ctx, narrativePrompt(in, results[i].ReportMD, text))
+		if err != nil {
+			return nil, fmt.Errorf("ai report for %s: %w", results[i].GoModPath, err)
+		}
+		narrative = strings.TrimSpace(narrative)
+		if narrative == "" {
+			return nil, fmt.Errorf("ai report for %s is empty", results[i].GoModPath)
+		}
+		results[i].ReportMD.Narrative = narrative
 	}
 	return results, nil
 }

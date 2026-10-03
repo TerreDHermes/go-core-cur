@@ -81,14 +81,124 @@ func (f fakePatch) Fetch(context.Context, string) (task.CVEPatch, error) {
 	return task.CVEPatch{CVE: f.cve, Files: files}, nil
 }
 
-func TestScanStopsWhenRepositoryIsNotGo(t *testing.T) {
-	got, err := Scan(context.Background(), Input{RepoPath: t.TempDir(), PackageName: "pkg"}, fakePatch{}, staticAI{})
+func TestScanNotGoGrepsPatchAndReadsNotes(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "dapp", "README.md"), "parseToken нельзя звать на сыром вводе.\n")
+	mustWrite(t, filepath.Join(root, "src", "auth.py"), "def parseToken(raw):\n    return raw\n")
+	ai := &captureAI{}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://example.com/widgets",
+		CVEID:        "CVE-2024-9",
+		PackageName:  "widgets",
+	}, fakePatch{cve: "CVE-2024-9", files: []task.PatchFile{{
+		Filename: "src/auth.py",
+		Patch:    "@@ -1,2 +1,3 @@\n def parseToken(raw):\n-    return raw\n+    raise ValueError(\"token rejected\")\n",
+	}}}, ai)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].ReportMD.Stage != task.StageNotGo {
 		t.Fatalf("%+v", got)
 	}
+	grep := got[0].ReportMD.Grep
+	if grep == nil || grep.Source != "patch" || !containsAll(grep.Patterns, "parseToken", "token rejected") {
+		t.Fatalf("%+v", grep)
+	}
+	if !hitPath(grep.Hits, "./src/auth.py") || !hitPath(grep.Hits, "./dapp/README.md") {
+		t.Fatal(grep.Hits)
+	}
+	if !excerptHas(grep.Excerpts, "./src/auth.py", "parseToken") {
+		t.Fatal(grep.Excerpts)
+	}
+	if got[0].ReportMD.DevNotes == nil || !strings.Contains(got[0].ReportMD.DevNotes.Text, "сыром вводе") {
+		t.Fatalf("%+v", got[0].ReportMD.DevNotes)
+	}
+	pre := got[0].ReportMD.PreVerdict
+	for _, part := range []string{"Заметки разработчиков", "не на Go", "из патча", "parseToken", "Кусков файлов сохранено: 2"} {
+		if !strings.Contains(pre, part) {
+			t.Fatal(pre)
+		}
+	}
+	if len(ai.prompts) != 2 {
+		t.Fatal(len(ai.prompts))
+	}
+	if !strings.Contains(ai.prompts[0], `применима к компоненту "widgets"`) || !strings.Contains(ai.prompts[0], "не на Go") || !strings.Contains(ai.prompts[0], "сыром вводе") {
+		t.Fatal(ai.prompts[0])
+	}
+	if !strings.Contains(ai.prompts[1], "подробный журнал") || !strings.Contains(ai.prompts[1], "model-verdict") {
+		t.Fatal(ai.prompts[1])
+	}
+	if got[0].ReportMD.Narrative != "narrative-text" || got[0].Verdict != "model-verdict" {
+		t.Fatalf("verdict %q narrative %q", got[0].Verdict, got[0].ReportMD.Narrative)
+	}
+}
+
+func TestScanNotGoGrepsDescriptionWithoutNotes(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "lib.py"), "def HostID():\n    return 1\n")
+	ai := &captureAI{}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://example.com/widgets",
+		CVEID:        "CVE-2026-24051",
+		PackageName:  "widgets",
+	}, describedPatch{}, ai)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ReportMD.Stage != task.StageNotGo || got[0].ReportMD.DevNotes != nil {
+		t.Fatalf("%+v", got[0].ReportMD.DevNotes)
+	}
+	if got[0].ReportMD.Grep == nil || got[0].ReportMD.Grep.Source != "description" {
+		t.Fatalf("%+v", got[0].ReportMD.Grep)
+	}
+	if strings.Join(got[0].ReportMD.Grep.Patterns, ",") != "HostID,readMachineID" {
+		t.Fatal(got[0].ReportMD.Grep.Patterns)
+	}
+	if len(got[0].ReportMD.Grep.Hits) != 1 || got[0].ReportMD.Grep.Hits[0].Path != "./lib.py" {
+		t.Fatal(got[0].ReportMD.Grep.Hits)
+	}
+	if strings.Contains(got[0].ReportMD.PreVerdict, "dapp") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
+	}
+	if !strings.Contains(got[0].ReportMD.PreVerdict, "Файлов в патче нет") || !strings.Contains(got[0].ReportMD.PreVerdict, "из описания") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
+	}
+	if len(ai.prompts) != 3 || !strings.Contains(ai.prompts[1], "не на Go") || !strings.Contains(ai.prompts[2], "файла не было") {
+		t.Fatalf("prompts %d", len(ai.prompts))
+	}
+}
+
+func hitPath(hits []task.GrepHit, path string) bool {
+	for _, hit := range hits {
+		if hit.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func excerptHas(excerpts []task.GrepExcerpt, path, text string) bool {
+	for _, excerpt := range excerpts {
+		if excerpt.Path == path && strings.Contains(excerpt.Text, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAll(items []string, want ...string) bool {
+	got := map[string]bool{}
+	for _, item := range items {
+		got[item] = true
+	}
+	for _, item := range want {
+		if !got[item] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestScanFindsPatchedFileInVendor(t *testing.T) {
@@ -303,7 +413,7 @@ func TestScanPromptTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ai.prompts) != 1 {
+	if len(ai.prompts) != 2 || !strings.Contains(ai.prompts[1], "подробный журнал") {
 		t.Fatal(len(ai.prompts))
 	}
 	prompt := ai.prompts[0]
@@ -451,7 +561,7 @@ func TestScanGrepsWhenPatchIsMissing(t *testing.T) {
 	if !strings.Contains(got[0].ReportMD.PreVerdict, "HostID, readMachineID") || !strings.Contains(got[0].ReportMD.PreVerdict, "Совпадений сохранено: 1") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
-	if len(ai.prompts) != 2 || !strings.Contains(ai.prompts[0], "grep -rwn") {
+	if len(ai.prompts) != 3 || !strings.Contains(ai.prompts[0], "grep -rwn") {
 		t.Fatalf("prompts %d", len(ai.prompts))
 	}
 	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "func HostID") {
@@ -500,13 +610,44 @@ func (c *captureAI) Explain(_ context.Context, prompt string) (string, error) {
 	if strings.Contains(prompt, "grep -rwn") {
 		return "HostID\nreadMachineID\n", nil
 	}
+	if strings.Contains(prompt, "подробный журнал") {
+		return "narrative-text", nil
+	}
 	return "model-verdict", nil
 }
 
 func TestScanFailsWhenAIFails(t *testing.T) {
-	_, err := Scan(context.Background(), Input{RepoPath: t.TempDir(), PackageName: "pkg"}, fakePatch{}, failAI{})
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+	_, err := Scan(context.Background(), Input{RepoPath: root, PackageName: "pkg"}, fakePatch{}, failAI{})
 	if err == nil || !strings.Contains(err.Error(), "ai verdict") {
 		t.Fatal(err)
+	}
+}
+
+func TestPatchGrepPatternsPreferFunctionsAndLiterals(t *testing.T) {
+	got := patchGrepPatterns(task.CVEPatch{Files: []task.PatchFile{{
+		Filename: "sdk/resource/host_id.go",
+		Patch:    "@@ -1,3 +1,4 @@ func HostID() string {\n \treturn readMachineID()\n+\treturn \"machine id missing\"\n }\n",
+	}}})
+	if len(got) == 0 || got[0] != "HostID" || !containsAll(got, "machine id missing", "readMachineID", "host_id") {
+		t.Fatal(got)
+	}
+	if len(got) > maxPatchPatterns {
+		t.Fatal(len(got))
+	}
+}
+
+func TestLoadDevNotesSkipsMissingAndTruncates(t *testing.T) {
+	missing, err := loadDevNotes(t.TempDir())
+	if err != nil || missing != nil {
+		t.Fatal(err, missing)
+	}
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "dapp", "README.md"), strings.Repeat("я", maxDevNotesRunes+10))
+	notes, err := loadDevNotes(root)
+	if err != nil || notes == nil || !notes.Truncated || len([]rune(notes.Text)) != maxDevNotesRunes {
+		t.Fatalf("%v %+v", err, notes)
 	}
 }
 

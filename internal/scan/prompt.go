@@ -18,7 +18,16 @@ func verdictPrompt(in Input, report task.Report) string {
 Объяснение возьми только из отчёта. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.
 Достижимость вызовов ещё не проверялась: если файл патча найден, уязвимый код в дереве есть; если все файлы патча отмечены false, уязвимого кода нет.`
 	opening := verdictOpening(in, report)
-	if report.Reach != nil && report.Reach.Reachable != nil {
+	if report.Stage == task.StageNotGo && report.Grep != nil {
+		rules = `Проект не на Go: go.mod нет, deadcode не запускался. Реши по полю grep и по dev_notes, если они есть, применима уязвимость или нет.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с одного из двух вариантов ниже и сразу продолжи после «Все дело в том, что».
+Если совпадения и куски файлов относятся к описанному коду, выбери вариант со словом «применима». Если совпадений нет или они не про этот код, выбери «неприменима».
+Поле grep.source равно "patch", когда фразы взяты из diff, и "description", когда из описания.
+Поле grep.excerpts — куски файлов вокруг совпадений, с номерами строк.
+Не меняй идентификатор CVE, алиасы и имя компонента.`
+		opening = notGoChoice(in, report)
+	} else if report.Reach != nil && report.Reach.Reachable != nil {
 		if *report.Reach.Reachable {
 			rules = `Файлы патча есть в дереве, и deadcode нашёл путь от main до уязвимой функции.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
@@ -40,7 +49,8 @@ func verdictPrompt(in Input, report task.Report) string {
 Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию. Достижимость вызовов не проверялась.`
 		opening = grepChoice(in, report)
 	}
-	return fmt.Sprintf(`Ты пишешь итоговый вердикт по анализу уязвимости в Go-проекте.
+	rules += "\nЕсли в отчёте есть dev_notes, учти их в продолжении, когда они относятся к уязвимости. Если поля нет, не упоминай заметки."
+	return fmt.Sprintf(`Ты пишешь итоговый вердикт по анализу уязвимости в проекте.
 %s
 
 %s
@@ -48,6 +58,13 @@ func verdictPrompt(in Input, report task.Report) string {
 Отчёт:
 %s
 `, rules, opening, raw)
+}
+
+func notGoChoice(in Input, report task.Report) string {
+	name := componentName(in.ComponentURL)
+	label := cveLabel(in.CVEID, report.Patch.Aliases)
+	return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s", хотя проект написан не на Go: следы описанного кода в дереве есть. Все дело в том, что
+Потенциальная уязвимость %s неприменима к компоненту "%s": проект написан не на Go и следов описанного кода в дереве не видно. Все дело в том, что`, label, name, label, name)
 }
 
 func reachOpening(in Input, report task.Report, reachable bool) string {
@@ -104,7 +121,7 @@ func verdictOpening(in Input, report task.Report) string {
 	case report.FromRoot:
 		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s". Все дело в том, что`, label, name)
 	case report.Stage == task.StageNotGo:
-		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s", потому что проект реализован не на Go. Все дело в том, что`, label, name)
+		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": проект не на Go, а поиск по дереву не сохранён. Все дело в том, что`, label, name)
 	case report.Stage == task.StagePackageAbsent:
 		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s", потому что зависимость "%s" ни в одном go.mod не найдена. Все дело в том, что`, label, name, in.PackageName)
 	case report.Stage == task.StageNoVendor:

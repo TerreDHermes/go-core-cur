@@ -118,7 +118,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		modules = append(modules, moduleResponse{
 			GoModPath: m.GoModPath,
 			Verdict:   m.Verdict,
-			ReportMD:  m.ReportMD,
+			ReportMD:  m.ReportMD.PublicText(),
 		})
 	}
 	writeJSON(w, http.StatusOK, taskResponse{
@@ -149,9 +149,9 @@ type taskResponse struct {
 }
 
 type moduleResponse struct {
-	GoModPath string      `json:"go_mod_path"`
-	Verdict   string      `json:"verdict"`
-	ReportMD  task.Report `json:"report_md"`
+	GoModPath string `json:"go_mod_path"`
+	Verdict   string `json:"verdict"`
+	ReportMD  string `json:"report_md"`
 }
 
 func (h *Handler) report(w http.ResponseWriter, r *http.Request) {

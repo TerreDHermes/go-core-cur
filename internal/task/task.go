@@ -2,6 +2,7 @@ package task
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -61,6 +62,14 @@ func (t Task) CombinedReport() string {
 	for i, m := range t.Modules {
 		if i > 0 {
 			b.WriteByte('\n')
+		}
+		if strings.TrimSpace(m.ReportMD.Narrative) != "" {
+			title := m.GoModPath
+			if title == "" {
+				title = "module"
+			}
+			fmt.Fprintf(&b, "# %s\n\n%s", title, m.ReportMD.PublicText())
+			continue
 		}
 		text := m.ReportMD.Markdown()
 		b.WriteString(text)

@@ -7,11 +7,15 @@ import (
 	"cveanalysis/internal/task"
 )
 
-func notGo() task.ModuleResult {
-	return task.ModuleResult{
-		GoModPath: "-",
-		Verdict:   "Не было найдено ни одного go.mod. В связи с этим, сделаем вывод, что проект реализован не на языке go. Анализ возможен только проектов на языке golang.",
-		ReportMD:  task.Report{Stage: task.StageNotGo},
+func verdictNotGo(fileCount int, targeted bool) string {
+	text := "Не было найдено ни одного go.mod. Проект реализован не на Go, анализ по модулям и vendor не проводился. Патч запрошен."
+	switch {
+	case fileCount == 0:
+		return text + " Файлов в патче нет, поэтому фразы для поиска взяты из описания."
+	case targeted:
+		return text + fmt.Sprintf(" В патче файлов: %d. По ним собран точечный поиск по дереву.", fileCount)
+	default:
+		return text + fmt.Sprintf(" В патче файлов: %d, но фразы из diff не выделились, поиск идёт по описанию.", fileCount)
 	}
 }
 
@@ -55,7 +59,11 @@ func grepFacts(g task.GrepReport) string {
 	if list == "" {
 		list = "(фразы не выделены)"
 	}
-	text := fmt.Sprintf("Для поиска по проекту выбраны фразы: %s. Совпадений сохранено: %d.", list, len(g.Hits))
+	origin := "из описания"
+	if g.Source == "patch" {
+		origin = "из патча"
+	}
+	text := fmt.Sprintf("Для поиска по проекту выбраны фразы %s: %s. Совпадений сохранено: %d. Кусков файлов сохранено: %d.", origin, list, len(g.Hits), len(g.Excerpts))
 	if g.Truncated {
 		text += " Список совпадений обрезан до фиксированного размера."
 	}

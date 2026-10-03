@@ -42,6 +42,10 @@ func maybeGrep(ctx context.Context, repoPath string, patch task.CVEPatch, explai
 	if len(patch.Files) > 0 {
 		return nil, nil
 	}
+	return descriptionGrep(ctx, repoPath, patch, explain)
+}
+
+func descriptionGrep(ctx context.Context, repoPath string, patch task.CVEPatch, explain Explainer) (*grepEvidence, error) {
 	if explain == nil {
 		return nil, fmt.Errorf("ai client is not configured")
 	}
@@ -49,12 +53,24 @@ func maybeGrep(ctx context.Context, repoPath string, patch task.CVEPatch, explai
 	if err != nil {
 		return nil, fmt.Errorf("ai grep phrases: %w", err)
 	}
-	patterns := parseKeywords(text)
+	return grepEvidenceFrom(ctx, repoPath, "description", parseKeywords(text))
+}
+
+func patchTreeGrep(ctx context.Context, repoPath string, patch task.CVEPatch) (*grepEvidence, error) {
+	patterns := patchGrepPatterns(patch)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	return grepEvidenceFrom(ctx, repoPath, "patch", patterns)
+}
+
+func grepEvidenceFrom(ctx context.Context, repoPath, source string, patterns []string) (*grepEvidence, error) {
 	hits, excerpts, truncated, excerptsTruncated, err := grepRepo(ctx, repoPath, patterns)
 	if err != nil {
 		return nil, err
 	}
 	return &grepEvidence{report: task.GrepReport{
+		Source:            source,
 		Patterns:          patterns,
 		Hits:              hits,
 		Excerpts:          excerpts,
@@ -72,7 +88,7 @@ func applyGrep(result *task.ModuleResult, ev *grepEvidence) {
 	result.Verdict = strings.TrimSpace(result.Verdict + " " + grepFacts(copied))
 }
 
-func withGrep(ctx context.Context, repoPath string, in Input, patch task.CVEPatch, explain Explainer, results []task.ModuleResult) ([]task.ModuleResult, error) {
+func withGrep(ctx context.Context, repoPath string, in Input, patch task.CVEPatch, explain Explainer, notes *task.DevNotes, results []task.ModuleResult) ([]task.ModuleResult, error) {
 	ev, err := maybeGrep(ctx, repoPath, patch, explain)
 	if err != nil {
 		return nil, err
@@ -80,7 +96,7 @@ func withGrep(ctx context.Context, repoPath string, in Input, patch task.CVEPatc
 	for i := range results {
 		applyGrep(&results[i], ev)
 	}
-	return finish(ctx, in, results, explain)
+	return finish(ctx, in, results, explain, notes)
 }
 
 func grepRepo(ctx context.Context, repoPath string, patterns []string) ([]task.GrepHit, []task.GrepExcerpt, bool, bool, error) {
