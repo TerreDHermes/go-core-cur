@@ -9,8 +9,8 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"cveanalysis/internal/applicability/app"
-	"cveanalysis/internal/applicability/config"
+	"cve-patch-viewer/internal/applicability/app"
+	"cve-patch-viewer/internal/applicability/config"
 )
 
 func main() {

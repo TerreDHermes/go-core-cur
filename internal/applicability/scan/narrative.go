@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 func narrativePrompt(in Input, report task.Report, verdict string) string {

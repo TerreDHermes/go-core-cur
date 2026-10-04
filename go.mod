@@ -1,4 +1,4 @@
-module cveanalysis
+module cve-patch-viewer
 
 go 1.22.0
 

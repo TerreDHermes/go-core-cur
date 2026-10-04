@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 func TestClaimIsAtomic(t *testing.T) {

@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 type Store interface {

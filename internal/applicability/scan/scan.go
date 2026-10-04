@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 type Input struct {

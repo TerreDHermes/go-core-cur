@@ -3,7 +3,7 @@ package scan
 import (
 	"context"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 type Client struct {

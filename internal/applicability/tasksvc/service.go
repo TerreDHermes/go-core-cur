@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"cveanalysis/internal/applicability/store"
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/store"
+	"cve-patch-viewer/internal/applicability/task"
 
 	"github.com/google/uuid"
 )

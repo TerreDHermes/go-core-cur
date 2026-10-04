@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"cveanalysis/internal/applicability/scan"
-	"cveanalysis/internal/applicability/store"
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/scan"
+	"cve-patch-viewer/internal/applicability/store"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 type Cloner interface {

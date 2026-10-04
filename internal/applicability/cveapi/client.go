@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 // Client loads a CVE patch. A response whose message says the upstream read

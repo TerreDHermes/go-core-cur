@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"cveanalysis/internal/applicability/task"
-	"cveanalysis/internal/applicability/tasksvc"
+	"cve-patch-viewer/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/tasksvc"
 )
 
 type Service interface {

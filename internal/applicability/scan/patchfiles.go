@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 // locatePatchFiles checks every patch file inside vendor/<module>/...

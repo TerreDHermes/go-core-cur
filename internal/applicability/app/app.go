@@ -12,15 +12,15 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"cveanalysis/internal/applicability/ai"
-	"cveanalysis/internal/applicability/config"
-	"cveanalysis/internal/applicability/cveapi"
-	"cveanalysis/internal/applicability/gitrepo"
-	"cveanalysis/internal/applicability/httpapi"
-	"cveanalysis/internal/applicability/scan"
-	"cveanalysis/internal/applicability/store/sqlite"
-	"cveanalysis/internal/applicability/tasksvc"
-	"cveanalysis/internal/applicability/worker"
+	"cve-patch-viewer/internal/applicability/ai"
+	"cve-patch-viewer/internal/applicability/config"
+	"cve-patch-viewer/internal/applicability/cveapi"
+	"cve-patch-viewer/internal/applicability/gitrepo"
+	"cve-patch-viewer/internal/applicability/httpapi"
+	"cve-patch-viewer/internal/applicability/scan"
+	"cve-patch-viewer/internal/applicability/store/sqlite"
+	"cve-patch-viewer/internal/applicability/tasksvc"
+	"cve-patch-viewer/internal/applicability/worker"
 )
 
 func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {

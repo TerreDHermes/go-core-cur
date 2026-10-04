@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 func verdictNotGo(fileCount int, targeted bool) string {

@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"cveanalysis/internal/applicability/scan"
-	"cveanalysis/internal/applicability/store/sqlite"
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/scan"
+	"cve-patch-viewer/internal/applicability/store/sqlite"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 type pathClone struct {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {

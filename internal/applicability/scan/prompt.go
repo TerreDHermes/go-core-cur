@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 func verdictPrompt(in Input, report task.Report) string {

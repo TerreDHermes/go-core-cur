@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"cveanalysis/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/task"
 )
 
 const maxReachFuncs = 8
