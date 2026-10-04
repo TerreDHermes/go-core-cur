@@ -14,7 +14,6 @@ const (
 	StageNoVendor      = "no_vendor"
 	StageNoPatch       = "no_patch"
 	StagePatchFiles    = "patch_files"
-	StageVersionFixed  = "version_fixed"
 )
 
 type Report struct {

@@ -129,15 +129,11 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 		Version:       mod.Version,
 		Patch:         patch,
 	}
-	if stopped, ok := versionBlocks(in, &report, patch); ok {
-		return stopped
-	}
-	fact := versionFacts(report.VersionStatus, report.Version, report.FixedVersion)
 	if !mod.HasVendor {
 		report.Stage = task.StageNoVendor
 		return task.ModuleResult{
 			GoModPath: mod.GoModPath,
-			Verdict:   verdictNoVendor(in, mod.GoModPath, len(patch.Files) == 0) + fact,
+			Verdict:   verdictNoVendor(in, mod.GoModPath, len(patch.Files) == 0),
 			ReportMD:  report,
 		}
 	}
@@ -145,7 +141,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 		report.Stage = task.StageNoPatch
 		return task.ModuleResult{
 			GoModPath: mod.GoModPath,
-			Verdict:   verdictNoPatch(in, mod.GoModPath) + fact,
+			Verdict:   verdictNoPatch(in, mod.GoModPath),
 			ReportMD:  report,
 		}
 	}
@@ -153,7 +149,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	report.Stage = task.StagePatchFiles
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
-	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles) + fact
+	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles)
 	if patchFileFound(report) {
 		report.Reach = analyzeReach(ctx, in.RepoPath, patch.Files, report.PatchFiles)
 		verdict += reachFacts(report.Reach)

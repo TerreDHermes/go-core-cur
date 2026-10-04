@@ -647,7 +647,7 @@ func TestDecideApplicabilityFollowsTheAnalysis(t *testing.T) {
 		{"no vendor", task.Report{Stage: task.StageNoVendor}, "пока не оценена", task.Uncertain},
 		{"files missing", task.Report{Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: false}}}, "", task.NotApplicable},
 		{"files found", task.Report{Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: true}}}, "применима", task.Uncertain},
-		{"version fixed", task.Report{VersionStatus: versionFixed}, "применима", task.NotApplicable},
+		{"version is not a verdict", task.Report{VersionStatus: "fixed", FixedVersion: "v1.2.3", Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: true}}}, "применима", task.Uncertain},
 	}
 	for _, tc := range cases {
 		if got := decideApplicability(tc.report, tc.verdict); got != tc.want {
@@ -656,39 +656,7 @@ func TestDecideApplicabilityFollowsTheAnalysis(t *testing.T) {
 	}
 }
 
-func TestVersionGateStaysOnTheSameReleaseLine(t *testing.T) {
-	fixed := []string{"v1.1.9", "1.3.0"}
-	status, threshold := versionGate("v1.1.10", fixed)
-	if status != versionFixed || threshold != "v1.1.9" {
-		t.Fatalf("%s %s", status, threshold)
-	}
-	status, threshold = versionGate("v1.1.8", fixed)
-	if status != versionVulnerable || threshold != "v1.1.9" {
-		t.Fatalf("%s %s", status, threshold)
-	}
-	status, threshold = versionGate("v1.2.4", fixed)
-	if status != versionUnknown || threshold != "" {
-		t.Fatalf("%s %s", status, threshold)
-	}
-	status, threshold = versionGate("v1.3.0", fixed)
-	if status != versionFixed || threshold != "v1.3.0" {
-		t.Fatalf("%s %s", status, threshold)
-	}
-	status, _ = versionGate("v1.2.3-rc.1", []string{"v1.2.3"})
-	if status != versionVulnerable {
-		t.Fatal(status)
-	}
-	status, _ = versionGate("v1.2.1, v1.2.4", []string{"v1.2.3"})
-	if status != versionVulnerable {
-		t.Fatal(status)
-	}
-	status, _ = versionGate("", fixed)
-	if status != versionUnknown {
-		t.Fatal(status)
-	}
-}
-
-func TestScanStopsWhenVersionIsAlreadyFixed(t *testing.T) {
+func TestFixedVersionDoesNotStopTheScan(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire github.com/foo/bar v1.2.4\n")
 	mustWrite(t, filepath.Join(root, "vendor", "github.com", "foo", "bar", "a.go"), "package bar\n\nfunc HostID() {}\n")
@@ -704,13 +672,13 @@ func TestScanStopsWhenVersionIsAlreadyFixed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[0].ReportMD.Stage != task.StageVersionFixed || got[0].ReportMD.Reach != nil {
+	if got[0].ReportMD.Stage != task.StagePatchFiles || got[0].ReportMD.Reach == nil {
 		t.Fatalf("%+v", got[0].ReportMD)
 	}
-	if got[0].Applicability != task.NotApplicable || got[0].ReportMD.FixedVersion != "v1.2.3" {
-		t.Fatalf("%s %s", got[0].Applicability, got[0].ReportMD.FixedVersion)
+	if got[0].ReportMD.Version != "v1.2.4" || got[0].ReportMD.VersionStatus != "" || got[0].ReportMD.FixedVersion != "" {
+		t.Fatalf("%s %s %s", got[0].ReportMD.Version, got[0].ReportMD.VersionStatus, got[0].ReportMD.FixedVersion)
 	}
-	if !strings.Contains(got[0].ReportMD.PreVerdict, "v1.2.4") || !strings.Contains(got[0].ReportMD.PreVerdict, "v1.2.3") {
+	if strings.Contains(got[0].ReportMD.PreVerdict, "исправлен") || strings.Contains(got[0].Verdict, "исправлен") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
 }
@@ -729,8 +697,8 @@ func TestVersionOnAnotherLineDoesNotStopTheScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[0].ReportMD.Stage != task.StagePatchFiles || got[0].ReportMD.VersionStatus != versionUnknown {
-		t.Fatalf("stage %s status %s", got[0].ReportMD.Stage, got[0].ReportMD.VersionStatus)
+	if got[0].ReportMD.Stage != task.StagePatchFiles || got[0].ReportMD.VersionStatus != "" || got[0].ReportMD.FixedVersion != "" {
+		t.Fatalf("stage %s status %s fixed %s", got[0].ReportMD.Stage, got[0].ReportMD.VersionStatus, got[0].ReportMD.FixedVersion)
 	}
 	if got[0].Applicability != task.NotApplicable {
 		t.Fatal(got[0].Applicability)
@@ -752,10 +720,10 @@ func TestVulnerableVersionContinuesAndEmptyGrepIsNotApplicable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[0].ReportMD.Stage != task.StageNoPatch || got[0].ReportMD.VersionStatus != versionVulnerable || got[0].ReportMD.FixedVersion != "v1.2.3" {
+	if got[0].ReportMD.Stage != task.StageNoPatch || got[0].ReportMD.VersionStatus != "" || got[0].ReportMD.FixedVersion != "" {
 		t.Fatalf("%s %s %s", got[0].ReportMD.Stage, got[0].ReportMD.VersionStatus, got[0].ReportMD.FixedVersion)
 	}
-	if !strings.Contains(got[0].ReportMD.PreVerdict, "ниже исправления") {
+	if strings.Contains(got[0].ReportMD.PreVerdict, "исправлен") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
 	if got[0].ReportMD.Grep == nil || len(got[0].ReportMD.Grep.Hits) != 0 || got[0].Applicability != task.NotApplicable {

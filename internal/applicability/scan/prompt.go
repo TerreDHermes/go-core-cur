@@ -18,13 +18,7 @@ func verdictPrompt(in Input, report task.Report) string {
 Объяснение возьми только из отчёта. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.
 Достижимость вызовов ещё не проверялась: если файл патча найден, уязвимый код в дереве есть; если все файлы патча отмечены false, уязвимого кода нет.`
 	opening := verdictOpening(in, report)
-	if report.VersionStatus == versionFixed {
-		rules = `Версия зависимости уже содержит исправление на своей линии релиза. Код после этого не разбирался.
-Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
-Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
-Уязвимость неприменима из-за версии. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версии.`
-		opening = versionFixedOpening(in, report)
-	} else if patchFileFound(report) && (report.Reach == nil || report.Reach.Reachable == nil) {
+	if patchFileFound(report) && (report.Reach == nil || report.Reach.Reachable == nil) {
 		rules = `Файлы патча найдены, но проверка досягаемости не дала ответа: анализ не доведён.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
@@ -68,6 +62,7 @@ func verdictPrompt(in Input, report task.Report) string {
 		opening = grepChoice(in, report)
 	}
 	rules += "\nЕсли в отчёте есть dev_notes, учти их в продолжении, когда они относятся к уязвимости. Если поля нет, не упоминай заметки."
+	rules += "\nfixed_versions и версию зависимости для вывода не используй. Если уязвимость есть в списке, версия уже считается уязвимой. Решение только по коду, поиску и досягаемости."
 	return fmt.Sprintf(`Ты пишешь итоговый вердикт по анализу уязвимости в проекте.
 %s
 
@@ -84,12 +79,6 @@ func notGoChoice(in Input, report task.Report) string {
 	return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s", хотя проект написан не на Go: следы описанного кода в дереве есть. Все дело в том, что
 Потенциальная уязвимость %s неприменима к компоненту "%s": проект написан не на Go и найденные совпадения не про этот код. Все дело в том, что
 Потенциальная уязвимость %s для компонента "%s" неопределенна: проект не на Go, совпадения есть, но по ним не видно, тот ли это уязвимый код. Все дело в том, что`, label, name, label, name, label, name)
-}
-
-func versionFixedOpening(in Input, report task.Report) string {
-	name := componentName(in.ComponentURL)
-	label := cveLabel(in.CVEID, report.Patch.Aliases)
-	return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s", так как зависимость "%s" версии "%s" уже не ниже исправления "%s" на той же линии релиза. Все дело в том, что`, label, name, in.PackageName, report.Version, report.FixedVersion)
 }
 
 func reachUnknownOpening(in Input, report task.Report) string {
