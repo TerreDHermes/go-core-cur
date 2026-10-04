@@ -62,7 +62,7 @@ curl -s -X POST localhost:8741/api/v1/analysis \
   -d '{"component_url":"https://github.com/golang/example","branch":"master","cve_id":"CVE-2024-0001","package_name":"example"}'
 ```
 
-`GET /api/v1/analysis?limit=10&offset=0&status=PENDING` — список без `verdict` и `report_md`. У каждой задачи есть `duration_ms` и `applicability`.
+`GET /api/v1/analysis?limit=10&offset=0&status=PENDING` — `{"items":[...],"total":N}`. В `items` нет `verdict` и `report_md`. У каждой задачи есть `duration_ms` и `applicability`. `total` — сколько таких записей в базе под тем же фильтром `status` (без фильтра — все задачи), без учёта `limit` и `offset`.
 
 `duration_ms` — `updated_at` минус `created_at`, в миллисекундах. Это сколько задача живёт с момента запроса клиента до последнего изменения статуса.
 

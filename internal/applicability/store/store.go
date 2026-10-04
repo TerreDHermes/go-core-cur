@@ -13,5 +13,6 @@ type Store interface {
 	Fail(ctx context.Context, id, errMsg, updatedAt string) error
 	Get(ctx context.Context, id string) (task.Task, error)
 	List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error)
+	Count(ctx context.Context, status task.Status) (int, error)
 	ListPendingIDs(ctx context.Context) ([]string, error)
 }

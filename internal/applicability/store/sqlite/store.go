@@ -200,6 +200,20 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 	return out, rows.Err()
 }
 
+func (s *Store) Count(ctx context.Context, status task.Status) (int, error) {
+	q := `SELECT COUNT(*) FROM analysis_tasks`
+	var args []any
+	if status != "" {
+		q += ` WHERE status = ?`
+		args = append(args, string(status))
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count tasks: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Store) ListPendingIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id FROM analysis_tasks

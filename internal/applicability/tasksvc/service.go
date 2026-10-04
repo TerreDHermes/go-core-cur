@@ -61,9 +61,9 @@ func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, erro
 	return t.ID, nil
 }
 
-func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, error) {
+func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, int, error) {
 	if f.Status != "" && !f.Status.Valid() {
-		return nil, fmt.Errorf("%w: %s", task.ErrInvalidStatus, f.Status)
+		return nil, 0, fmt.Errorf("%w: %s", task.ErrInvalidStatus, f.Status)
 	}
 	if f.Limit <= 0 {
 		f.Limit = 10
@@ -72,9 +72,17 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, error) {
 		f.Limit = 100
 	}
 	if f.Offset < 0 {
-		return nil, fmt.Errorf("%w: offset must be >= 0", task.ErrInvalidInput)
+		return nil, 0, fmt.Errorf("%w: offset must be >= 0", task.ErrInvalidInput)
 	}
-	return s.store.List(ctx, f.Status, f.Limit, f.Offset)
+	items, err := s.store.List(ctx, f.Status, f.Limit, f.Offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	total, err := s.store.Count(ctx, f.Status)
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
 }
 
 func (s *Service) Get(ctx context.Context, id string) (task.Task, error) {

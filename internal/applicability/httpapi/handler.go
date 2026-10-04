@@ -15,7 +15,7 @@ import (
 
 type Service interface {
 	Create(ctx context.Context, in task.CreateInput) (string, error)
-	List(ctx context.Context, f tasksvc.ListFilter) ([]task.Task, error)
+	List(ctx context.Context, f tasksvc.ListFilter) ([]task.Task, int, error)
 	Get(ctx context.Context, id string) (task.Task, error)
 	Report(ctx context.Context, id string) (cveID, markdown string, err error)
 }
@@ -83,7 +83,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		offset = n
 	}
-	items, err := h.svc.List(r.Context(), tasksvc.ListFilter{
+	items, total, err := h.svc.List(r.Context(), tasksvc.ListFilter{
 		Status: task.Status(q.Get("status")),
 		Limit:  limit,
 		Offset: offset,
@@ -106,7 +106,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			Applicability: t.PublicApplicability(),
 		})
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": out,
+		"total": total,
+	})
 }
 
 type taskSummary struct {

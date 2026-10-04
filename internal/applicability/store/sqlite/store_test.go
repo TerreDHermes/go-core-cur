@@ -80,6 +80,27 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	if all[0].ErrorMsg != "" || len(all[0].Modules) != 0 {
 		t.Fatalf("list leaked fields: %+v", all[0])
 	}
+	total, err := st.Count(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Fatalf("total %d", total)
+	}
+	pendingCount, err := st.Count(ctx, task.StatusPending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pendingCount != 1 {
+		t.Fatalf("pending %d", pendingCount)
+	}
+	page, err := st.List(ctx, "", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 1 || page[0].ID != "a" || total != 2 {
+		t.Fatalf("page %+v total %d", page, total)
+	}
 	failed, err := st.Get(ctx, "b")
 	if err != nil {
 		t.Fatal(err)

@@ -19,13 +19,13 @@ type fakeSvc struct {
 func (f fakeSvc) Create(context.Context, task.CreateInput) (string, error) {
 	return f.created, nil
 }
-func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, error) {
+func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, int, error) {
 	return []task.Task{{
 		ID: "1", Status: task.StatusPending, CVEID: "CVE-1",
 		ComponentURL: "https://example.com/r", Branch: "main", PackageName: "pkg",
 		CreatedAt: "2026-01-01T00:00:00Z",
 		Modules:   []task.ModuleResult{{GoModPath: "./go.mod", Verdict: "hidden", ReportMD: task.Report{GoModPath: "./hidden"}}},
-	}}, nil
+	}}, 7, nil
 }
 func (f fakeSvc) Get(context.Context, string) (task.Task, error) {
 	return task.Task{
@@ -72,6 +72,16 @@ func TestCreateAndList(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "hidden") || strings.Contains(rec.Body.String(), "report_md") {
 		t.Fatalf("list leaked heavy fields: %s", rec.Body.String())
+	}
+	var listed struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Total != 7 || len(listed.Items) != 1 || listed.Items[0]["id"] != "1" {
+		t.Fatalf("%s", rec.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/1/report", nil)
