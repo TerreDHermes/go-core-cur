@@ -46,7 +46,7 @@ go run ./cmd/server
 | `SQLITE_PATH` | `data/analysis.db` | Файл SQLite |
 | `WORKER_COUNT` | `2` | Число воркеров |
 | `GIT_TIMEOUT` | `2m` | Таймаут clone и поиска |
-| `GIT_TOKEN` | пусто | Токен для приватного HTTPS-репозитория. Без него чужой приватный репозиторий отвечает 403 |
+| `GIT_TOKEN` | пусто | Токен GitHub для clone. Подходит и `https://github.com/org/repo.git`, и `git@github.com:org/repo.git`: SSH-адрес клонируется по HTTPS с этим токеном. Без токена адрес не меняется |
 | `CVE_PATCH_BASE` | `http://d49.dev.k8s:8080` | База ручки `GET /cve/patch/{cve_id}` |
 | `AI_BASE_URL` | пусто | Полный URL чата модели. Пустой URL роняет задачу на шаге вердикта |
 | `AI_TOKEN` | пусто | Bearer-токен модели |
