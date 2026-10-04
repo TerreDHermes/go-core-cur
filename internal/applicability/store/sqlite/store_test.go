@@ -121,6 +121,53 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	}
 }
 
+func TestListUsesModuleVerdictWhenApplicabilityColumnIsEmpty(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	item := task.Task{
+		ID: "old", Status: task.StatusPending,
+		ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p",
+		CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z",
+	}
+	if err := st.Create(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Claim(ctx, item.ID, "2026-01-03T00:00:01Z"); err != nil {
+		t.Fatal(err)
+	}
+	modules := []task.ModuleResult{
+		{GoModPath: "./go.mod", Verdict: "Уязвимость неприменима к компоненту."},
+		{GoModPath: "./scripts/go.mod", Verdict: "Уязвимость неприменима к компоненту."},
+	}
+	if err := st.Complete(ctx, item.ID, modules, "2026-01-03T00:00:02Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE analysis_tasks SET applicability = '' WHERE id = ?`, item.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := st.List(ctx, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := listed[0].PublicApplicability()
+	if got == nil || *got != task.NotApplicable {
+		t.Fatalf("list applicability %v", got)
+	}
+
+	if _, err := st.db.ExecContext(ctx, `UPDATE analysis_tasks SET applicability = ? WHERE id = ?`, task.Applicable, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = st.List(ctx, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = listed[0].PublicApplicability()
+	if got == nil || *got != task.Applicable || len(listed[0].Modules) != 0 {
+		t.Fatalf("stored %v modules %d", got, len(listed[0].Modules))
+	}
+}
+
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
