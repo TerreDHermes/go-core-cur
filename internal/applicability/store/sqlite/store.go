@@ -197,59 +197,7 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 	if out == nil {
 		out = []task.Task{}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := s.fillMissingApplicability(ctx, out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// fillMissingApplicability loads module verdicts for completed tasks whose
-// applicability column is still empty. The detail page already rolls those
-// modules up; the list has to do the same, otherwise an old row looks uncertain.
-func (s *Store) fillMissingApplicability(ctx context.Context, tasks []task.Task) error {
-	ids := make([]any, 0)
-	index := make(map[string]int, len(tasks))
-	for i := range tasks {
-		if tasks[i].Status != task.StatusCompleted || tasks[i].Applicability != "" {
-			continue
-		}
-		ids = append(ids, tasks[i].ID)
-		index[tasks[i].ID] = i
-		tasks[i].Modules = []task.ModuleResult{}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT task_id, go_mod_path, verdict, report_md
-		FROM analysis_task_modules
-		WHERE task_id IN (`+placeholders+`)
-		ORDER BY go_mod_path ASC`, ids...)
-	if err != nil {
-		return fmt.Errorf("list module applicability: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var taskID, goModPath, verdict, raw string
-		if err := rows.Scan(&taskID, &goModPath, &verdict, &raw); err != nil {
-			return err
-		}
-		m, err := moduleFromRow(goModPath, verdict, raw)
-		if err != nil {
-			return err
-		}
-		m.ReportMD = task.Report{}
-		i, ok := index[taskID]
-		if !ok {
-			continue
-		}
-		tasks[i].Modules = append(tasks[i].Modules, m)
-	}
-	return rows.Err()
+	return out, rows.Err()
 }
 
 func (s *Store) Count(ctx context.Context, status task.Status) (int, error) {
@@ -317,33 +265,23 @@ func (s *Store) modules(ctx context.Context, taskID string) ([]task.ModuleResult
 	defer rows.Close()
 	out := []task.ModuleResult{}
 	for rows.Next() {
-		var goModPath, verdict, raw string
-		if err := rows.Scan(&goModPath, &verdict, &raw); err != nil {
+		var m task.ModuleResult
+		var raw string
+		if err := rows.Scan(&m.GoModPath, &m.Verdict, &raw); err != nil {
 			return nil, err
 		}
-		m, err := moduleFromRow(goModPath, verdict, raw)
-		if err != nil {
-			return nil, err
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &m.ReportMD); err != nil {
+				return nil, fmt.Errorf("decode report: %w", err)
+			}
+		}
+		m.Applicability = m.ReportMD.Applicability
+		if m.Applicability == "" {
+			m.Applicability = task.ClassifyVerdict(m.Verdict)
 		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
-}
-
-func moduleFromRow(goModPath, verdict, raw string) (task.ModuleResult, error) {
-	var m task.ModuleResult
-	m.GoModPath = goModPath
-	m.Verdict = verdict
-	if raw != "" {
-		if err := json.Unmarshal([]byte(raw), &m.ReportMD); err != nil {
-			return task.ModuleResult{}, fmt.Errorf("decode report: %w", err)
-		}
-	}
-	m.Applicability = m.ReportMD.Applicability
-	if m.Applicability == "" {
-		m.Applicability = task.ClassifyVerdict(m.Verdict)
-	}
-	return m, nil
 }
 
 func rowsOne(res sql.Result, op string) error {
