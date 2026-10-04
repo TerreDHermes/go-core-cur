@@ -66,7 +66,7 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		return nil, err
 	}
 	if len(matched) == 0 {
-		return withGrep(ctx, in.RepoPath, in, patch, explain, notes, []task.ModuleResult{packageAbsent(in, patch)})
+		return finish(ctx, in, []task.ModuleResult{packageAbsent(in, patch)}, explain, notes)
 	}
 
 	var found []task.ModuleResult
@@ -129,11 +129,15 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 		Version:       mod.Version,
 		Patch:         patch,
 	}
+	if stopped, ok := versionBlocks(in, &report, patch); ok {
+		return stopped
+	}
+	fact := versionFacts(report.VersionStatus, report.Version, report.FixedVersion)
 	if !mod.HasVendor {
 		report.Stage = task.StageNoVendor
 		return task.ModuleResult{
 			GoModPath: mod.GoModPath,
-			Verdict:   verdictNoVendor(in, mod.GoModPath, len(patch.Files) == 0),
+			Verdict:   verdictNoVendor(in, mod.GoModPath, len(patch.Files) == 0) + fact,
 			ReportMD:  report,
 		}
 	}
@@ -141,7 +145,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 		report.Stage = task.StageNoPatch
 		return task.ModuleResult{
 			GoModPath: mod.GoModPath,
-			Verdict:   verdictNoPatch(in, mod.GoModPath),
+			Verdict:   verdictNoPatch(in, mod.GoModPath) + fact,
 			ReportMD:  report,
 		}
 	}
@@ -149,7 +153,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	report.Stage = task.StagePatchFiles
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
-	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles)
+	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles) + fact
 	if patchFileFound(report) {
 		report.Reach = analyzeReach(ctx, in.RepoPath, patch.Files, report.PatchFiles)
 		verdict += reachFacts(report.Reach)
@@ -220,6 +224,9 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 			return nil, fmt.Errorf("ai verdict for %s is empty", results[i].GoModPath)
 		}
 		results[i].Verdict = text
+		kind := decideApplicability(results[i].ReportMD, text)
+		results[i].Applicability = kind
+		results[i].ReportMD.Applicability = kind
 		narrative, err := explain.Explain(ctx, narrativePrompt(in, results[i].ReportMD, text))
 		if err != nil {
 			return nil, fmt.Errorf("ai report for %s: %w", results[i].GoModPath, err)

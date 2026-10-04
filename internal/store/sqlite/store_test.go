@@ -43,6 +43,13 @@ func TestClaimIsAtomic(t *testing.T) {
 	if got.Status != task.StatusCompleted || len(got.Modules) != 1 || got.Modules[0].GoModPath != "./go.mod" {
 		t.Fatalf("%+v", got)
 	}
+	if got.Applicability != task.Uncertain {
+		t.Fatal(got.Applicability)
+	}
+	ms := got.DurationMS()
+	if ms == nil || *ms != 3000 {
+		t.Fatalf("created %s updated %s duration %v", got.CreatedAt, got.UpdatedAt, ms)
+	}
 }
 
 func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
@@ -72,6 +79,17 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	}
 	if all[0].ErrorMsg != "" || len(all[0].Modules) != 0 {
 		t.Fatalf("list leaked fields: %+v", all[0])
+	}
+	failed, err := st.Get(ctx, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Applicability != task.Uncertain {
+		t.Fatal(failed.Applicability)
+	}
+	ms := failed.DurationMS()
+	if ms == nil || *ms != 2000 {
+		t.Fatalf("created %s updated %s duration %v", failed.CreatedAt, failed.UpdatedAt, ms)
 	}
 	pending, err := st.ListPendingIDs(ctx)
 	if err != nil {

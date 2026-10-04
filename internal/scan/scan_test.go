@@ -43,6 +43,9 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 	if got[0].Verdict != "model-verdict" || got[0].ReportMD.Version != "v1.2.3" || got[1].ReportMD.Version != "v1.2.3" {
 		t.Fatalf("verdict %q versions %q %q", got[0].Verdict, got[0].ReportMD.Version, got[1].ReportMD.Version)
 	}
+	if got[0].Applicability != task.NotApplicable || got[1].Applicability != task.Uncertain {
+		t.Fatalf("%s %s", got[0].Applicability, got[1].Applicability)
+	}
 	if len(got[0].ReportMD.PatchFiles) != 1 || got[0].ReportMD.PatchFiles[0].Found || got[0].ReportMD.PatchFiles[0].Filename != "a.go" {
 		t.Fatalf("%+v", got[0].ReportMD.PatchFiles)
 	}
@@ -71,6 +74,7 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 type fakePatch struct {
 	cve   string
 	files []task.PatchFile
+	fixed []string
 }
 
 func (f fakePatch) Fetch(context.Context, string) (task.CVEPatch, error) {
@@ -78,7 +82,7 @@ func (f fakePatch) Fetch(context.Context, string) (task.CVEPatch, error) {
 	if files == nil {
 		files = []task.PatchFile{{Filename: "a.go", Patch: "diff"}}
 	}
-	return task.CVEPatch{CVE: f.cve, Files: files}, nil
+	return task.CVEPatch{CVE: f.cve, Files: files, FixedVersions: f.fixed}, nil
 }
 
 func TestScanNotGoGrepsPatchAndReadsNotes(t *testing.T) {
@@ -165,7 +169,7 @@ func TestScanNotGoGrepsDescriptionWithoutNotes(t *testing.T) {
 	if !strings.Contains(got[0].ReportMD.PreVerdict, "Файлов в патче нет") || !strings.Contains(got[0].ReportMD.PreVerdict, "из описания") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
-	if len(ai.prompts) != 3 || !strings.Contains(ai.prompts[1], "не на Go") || !strings.Contains(ai.prompts[2], "файла не было") {
+	if len(ai.prompts) != 3 || !strings.Contains(ai.prompts[1], "не на Go") || !strings.Contains(ai.prompts[1], "неопределенна") || !strings.Contains(ai.prompts[2], "файла не было") {
 		t.Fatalf("prompts %d", len(ai.prompts))
 	}
 }
@@ -418,8 +422,9 @@ func TestScanPromptTemplates(t *testing.T) {
 	}
 	prompt := ai.prompts[0]
 	for _, part := range []string{
-		`Потенциальная уязвимость CVE-2026-24051 (GHSA-abcd) применима к компоненту "alertmanager"`,
-		`используется зависимость "go.opentelemetry.io/otel/sdk" версии "v1.43.0"`,
+		`Потенциальная уязвимость CVE-2026-24051 (GHSA-abcd) пока не оценена для компонента "alertmanager"`,
+		`зависимость "go.opentelemetry.io/otel/sdk" версии "v1.43.0"`,
+		`проверка досягаемости не дала ответа`,
 		`"version": "v1.43.0"`,
 		"host_id.go",
 	} {
@@ -564,7 +569,7 @@ func TestScanGrepsWhenPatchIsMissing(t *testing.T) {
 	if len(ai.prompts) != 3 || !strings.Contains(ai.prompts[0], "grep -rwn") {
 		t.Fatalf("prompts %d", len(ai.prompts))
 	}
-	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "func HostID") {
+	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "неопределенна") || !strings.Contains(ai.prompts[1], "func HostID") {
 		t.Fatal(ai.prompts[1])
 	}
 	if len(got[0].ReportMD.Grep.Excerpts) != 1 || !strings.Contains(got[0].ReportMD.Grep.Excerpts[0].Text, "func HostID") {
@@ -622,6 +627,160 @@ func TestScanFailsWhenAIFails(t *testing.T) {
 	_, err := Scan(context.Background(), Input{RepoPath: root, PackageName: "pkg"}, fakePatch{}, failAI{})
 	if err == nil || !strings.Contains(err.Error(), "ai verdict") {
 		t.Fatal(err)
+	}
+}
+
+func TestDecideApplicabilityFollowsTheAnalysis(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name    string
+		report  task.Report
+		verdict string
+		want    string
+	}{
+		{"live", task.Report{Reach: &task.ReachReport{Reachable: &yes}}, "неприменима", task.Applicable},
+		{"dead", task.Report{Reach: &task.ReachReport{Reachable: &no}}, "применима", task.NotApplicable},
+		{"grep no", task.Report{Grep: &task.GrepReport{}}, "Уязвимость неприменима к компоненту", task.NotApplicable},
+		{"grep empty but model says yes", task.Report{Grep: &task.GrepReport{}}, "Потенциальная уязвимость применима", task.NotApplicable},
+		{"grep unclear", task.Report{Grep: &task.GrepReport{Hits: []task.GrepHit{{Path: "a.py"}}}}, "model-verdict", task.Uncertain},
+		{"grep ambiguous", task.Report{Grep: &task.GrepReport{Hits: []task.GrepHit{{Path: "a.py"}}}}, "Уязвимость неопределенна: совпадения не про код.", task.Uncertain},
+		{"no vendor", task.Report{Stage: task.StageNoVendor}, "пока не оценена", task.Uncertain},
+		{"files missing", task.Report{Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: false}}}, "", task.NotApplicable},
+		{"files found", task.Report{Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: true}}}, "применима", task.Uncertain},
+		{"version fixed", task.Report{VersionStatus: versionFixed}, "применима", task.NotApplicable},
+	}
+	for _, tc := range cases {
+		if got := decideApplicability(tc.report, tc.verdict); got != tc.want {
+			t.Fatalf("%s: got %s", tc.name, got)
+		}
+	}
+}
+
+func TestVersionGateStaysOnTheSameReleaseLine(t *testing.T) {
+	fixed := []string{"v1.1.9", "1.3.0"}
+	status, threshold := versionGate("v1.1.10", fixed)
+	if status != versionFixed || threshold != "v1.1.9" {
+		t.Fatalf("%s %s", status, threshold)
+	}
+	status, threshold = versionGate("v1.1.8", fixed)
+	if status != versionVulnerable || threshold != "v1.1.9" {
+		t.Fatalf("%s %s", status, threshold)
+	}
+	status, threshold = versionGate("v1.2.4", fixed)
+	if status != versionUnknown || threshold != "" {
+		t.Fatalf("%s %s", status, threshold)
+	}
+	status, threshold = versionGate("v1.3.0", fixed)
+	if status != versionFixed || threshold != "v1.3.0" {
+		t.Fatalf("%s %s", status, threshold)
+	}
+	status, _ = versionGate("v1.2.3-rc.1", []string{"v1.2.3"})
+	if status != versionVulnerable {
+		t.Fatal(status)
+	}
+	status, _ = versionGate("v1.2.1, v1.2.4", []string{"v1.2.3"})
+	if status != versionVulnerable {
+		t.Fatal(status)
+	}
+	status, _ = versionGate("", fixed)
+	if status != versionUnknown {
+		t.Fatal(status)
+	}
+}
+
+func TestScanStopsWhenVersionIsAlreadyFixed(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire github.com/foo/bar v1.2.4\n")
+	mustWrite(t, filepath.Join(root, "vendor", "github.com", "foo", "bar", "a.go"), "package bar\n\nfunc HostID() {}\n")
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://example.com/app",
+		CVEID:        "CVE-1",
+		PackageName:  "github.com/foo/bar",
+	}, fakePatch{cve: "CVE-1", fixed: []string{"v1.2.3"}, files: []task.PatchFile{{
+		Filename: "a.go",
+		Patch:    "@@ -1 +1 @@\n func HostID() {}\n",
+	}}}, staticAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ReportMD.Stage != task.StageVersionFixed || got[0].ReportMD.Reach != nil {
+		t.Fatalf("%+v", got[0].ReportMD)
+	}
+	if got[0].Applicability != task.NotApplicable || got[0].ReportMD.FixedVersion != "v1.2.3" {
+		t.Fatalf("%s %s", got[0].Applicability, got[0].ReportMD.FixedVersion)
+	}
+	if !strings.Contains(got[0].ReportMD.PreVerdict, "v1.2.4") || !strings.Contains(got[0].ReportMD.PreVerdict, "v1.2.3") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
+	}
+}
+
+func TestVersionOnAnotherLineDoesNotStopTheScan(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire github.com/foo/bar v1.2.4\n")
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:    root,
+		CVEID:       "CVE-1",
+		PackageName: "github.com/foo/bar",
+	}, fakePatch{cve: "CVE-1", fixed: []string{"v1.1.9", "v1.3.0"}}, staticAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ReportMD.Stage != task.StagePatchFiles || got[0].ReportMD.VersionStatus != versionUnknown {
+		t.Fatalf("stage %s status %s", got[0].ReportMD.Stage, got[0].ReportMD.VersionStatus)
+	}
+	if got[0].Applicability != task.NotApplicable {
+		t.Fatal(got[0].Applicability)
+	}
+}
+
+func TestVulnerableVersionContinuesAndEmptyGrepIsNotApplicable(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire github.com/foo/bar v1.2.1\n")
+	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://example.com/app",
+		CVEID:        "CVE-1",
+		PackageName:  "github.com/foo/bar",
+	}, fakePatch{cve: "CVE-1", fixed: []string{"v1.2.3"}, files: []task.PatchFile{}}, &captureAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ReportMD.Stage != task.StageNoPatch || got[0].ReportMD.VersionStatus != versionVulnerable || got[0].ReportMD.FixedVersion != "v1.2.3" {
+		t.Fatalf("%s %s %s", got[0].ReportMD.Stage, got[0].ReportMD.VersionStatus, got[0].ReportMD.FixedVersion)
+	}
+	if !strings.Contains(got[0].ReportMD.PreVerdict, "ниже исправления") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
+	}
+	if got[0].ReportMD.Grep == nil || len(got[0].ReportMD.Grep.Hits) != 0 || got[0].Applicability != task.NotApplicable {
+		t.Fatalf("%+v %s", got[0].ReportMD.Grep, got[0].Applicability)
+	}
+}
+
+func TestPackageAbsentDoesNotSearchTheTree(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+	mustWrite(t, filepath.Join(root, "lib.py"), "def HostID():\n    return 1\n")
+	ai := &captureAI{}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:    root,
+		CVEID:       "CVE-1",
+		PackageName: "github.com/foo/bar",
+	}, describedPatch{}, ai)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ReportMD.Stage != task.StagePackageAbsent || got[0].ReportMD.Grep != nil || got[0].Applicability != task.NotApplicable {
+		t.Fatalf("%s %+v %s", got[0].ReportMD.Stage, got[0].ReportMD.Grep, got[0].Applicability)
+	}
+	if len(ai.prompts) != 2 || strings.Contains(ai.prompts[0], "grep -rwn") {
+		t.Fatal(ai.prompts[0])
 	}
 }
 

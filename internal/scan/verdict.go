@@ -78,6 +78,66 @@ func verdictRootPatchFiles(found []string) string {
 	return verdict + " В корне найдены файлы патча: " + strings.Join(found, ", ") + "."
 }
 
+func versionBlocks(in Input, report *task.Report, patch task.CVEPatch) (task.ModuleResult, bool) {
+	if strings.TrimSpace(report.Version) == "" {
+		return task.ModuleResult{}, false
+	}
+	status, threshold := versionGate(report.Version, fixedVersions(patch))
+	report.VersionStatus = status
+	report.FixedVersion = threshold
+	if status != versionFixed {
+		return task.ModuleResult{}, false
+	}
+	report.Stage = task.StageVersionFixed
+	return task.ModuleResult{
+		GoModPath: report.GoModPath,
+		Verdict:   verdictVersionFixed(in, report.GoModPath, report.Version, threshold),
+		ReportMD:  *report,
+	}, true
+}
+
+func verdictVersionFixed(in Input, goModPath, installed, fixed string) string {
+	return fmt.Sprintf("Пакет %s версии %s есть в %s. Эта версия уже не ниже исправления %s на той же линии релиза, поэтому разбор кода не проводился.", in.PackageName, installed, goModPath, fixed)
+}
+
+func versionFacts(status, installed, fixed string) string {
+	if status != versionVulnerable || fixed == "" {
+		return ""
+	}
+	return fmt.Sprintf(" Версия %s ниже исправления %s на той же линии релиза, разбор кода продолжен.", installed, fixed)
+}
+
+func decideApplicability(report task.Report, verdict string) string {
+	if report.VersionStatus == versionFixed {
+		return task.NotApplicable
+	}
+	if report.Reach != nil && report.Reach.Reachable != nil {
+		if *report.Reach.Reachable {
+			return task.Applicable
+		}
+		return task.NotApplicable
+	}
+	if patchFileFound(report) {
+		return task.Uncertain
+	}
+	if report.Grep != nil && len(report.Grep.Hits) == 0 {
+		return task.NotApplicable
+	}
+	if report.Grep != nil {
+		return task.ClassifyVerdict(verdict)
+	}
+	switch report.Stage {
+	case task.StagePackageAbsent:
+		return task.NotApplicable
+	case task.StageNoVendor, task.StageNoPatch, task.StageNotGo:
+		return task.Uncertain
+	}
+	if len(report.PatchFiles) > 0 {
+		return task.NotApplicable
+	}
+	return task.Uncertain
+}
+
 func formatAliases(ids []string, cveID string) string {
 	var aliases string
 	for _, id := range ids {

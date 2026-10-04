@@ -25,24 +25,26 @@ func (s Status) Valid() bool {
 }
 
 type Task struct {
-	ID           string
-	Status       Status
-	ComponentURL string
-	Branch       string
-	CVEID        string
-	PackageName  string
-	ErrorMsg     string
-	CreatedAt    string
-	UpdatedAt    string
-	Modules      []ModuleResult
+	ID            string
+	Status        Status
+	ComponentURL  string
+	Branch        string
+	CVEID         string
+	PackageName   string
+	ErrorMsg      string
+	CreatedAt     string
+	UpdatedAt     string
+	Applicability string
+	Modules       []ModuleResult
 }
 
 // ModuleResult is the outcome for one go.mod that lists PackageName.
 // A task has one entry per such file, and none for go.mod files that do not mention the package.
 type ModuleResult struct {
-	GoModPath string
-	Verdict   string
-	ReportMD  Report
+	GoModPath     string
+	Verdict       string
+	Applicability string
+	ReportMD      Report
 }
 
 type CreateInput struct {

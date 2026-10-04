@@ -14,6 +14,7 @@ const (
 	StageNoVendor      = "no_vendor"
 	StageNoPatch       = "no_patch"
 	StagePatchFiles    = "patch_files"
+	StageVersionFixed  = "version_fixed"
 )
 
 type Report struct {
@@ -24,6 +25,8 @@ type Report struct {
 	VendorPath      string           `json:"vendor_path,omitempty"`
 	MatchingLines   []string         `json:"matching_lines"`
 	Version         string           `json:"version,omitempty"`
+	VersionStatus   string           `json:"version_status,omitempty"`
+	FixedVersion    string           `json:"fixed_version,omitempty"`
 	PreVerdict      string           `json:"pre_verdict,omitempty"`
 	DevNotes        *DevNotes        `json:"dev_notes,omitempty"`
 	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
@@ -31,6 +34,7 @@ type Report struct {
 	Grep            *GrepReport      `json:"grep,omitempty"`
 	Reach           *ReachReport     `json:"reach,omitempty"`
 	Narrative       string           `json:"narrative,omitempty"`
+	Applicability   string           `json:"applicability,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
 }
 
@@ -173,6 +177,13 @@ func (r Report) Markdown() string {
 	}
 	if r.Version != "" {
 		fmt.Fprintf(&b, "Version: `%s`\n\n", r.Version)
+	}
+	if r.VersionStatus != "" {
+		fmt.Fprintf(&b, "Version check: `%s`", r.VersionStatus)
+		if r.FixedVersion != "" {
+			fmt.Fprintf(&b, " (`%s`)", r.FixedVersion)
+		}
+		b.WriteString("\n\n")
 	}
 	if r.PreVerdict != "" {
 		fmt.Fprintf(&b, "Pre-verdict: %s\n\n", r.PreVerdict)

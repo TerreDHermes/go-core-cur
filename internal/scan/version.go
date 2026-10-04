@@ -3,6 +3,15 @@ package scan
 import (
 	"regexp"
 	"strings"
+
+	"cveanalysis/internal/task"
+	"golang.org/x/mod/semver"
+)
+
+const (
+	versionFixed      = "fixed"
+	versionVulnerable = "vulnerable"
+	versionUnknown    = "unknown"
 )
 
 var moduleVersionRe = regexp.MustCompile(`^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$`)
@@ -54,6 +63,115 @@ func moduleVersion(content, pkg string) string {
 		return strings.Join(required, ", ")
 	}
 	return strings.Join(other, ", ")
+}
+
+// versionGate compares each required version with the fixed versions on the same
+// major.minor line. A fix on v1.1 or v1.3 does not clear v1.2. The result is fixed
+// only when every required version is at least the fix on its own line.
+func versionGate(installed string, fixed []string) (status, threshold string) {
+	required := splitVersions(installed)
+	fixes := canonicalVersions(fixed)
+	if len(required) == 0 || len(fixes) == 0 {
+		return versionUnknown, ""
+	}
+	var lines []string
+	allFixed := true
+	anyVulnerable := false
+	for _, raw := range required {
+		got, ok := canonicalVersion(raw)
+		if !ok {
+			allFixed = false
+			continue
+		}
+		fix, ok := lowestFixOnLine(got, fixes)
+		if !ok {
+			allFixed = false
+			continue
+		}
+		lines = append(lines, fix)
+		if semver.Compare(got, fix) < 0 {
+			anyVulnerable = true
+			allFixed = false
+		}
+	}
+	threshold = strings.Join(uniqueVersions(lines), ", ")
+	if allFixed && len(lines) == len(required) {
+		return versionFixed, threshold
+	}
+	if anyVulnerable {
+		return versionVulnerable, threshold
+	}
+	return versionUnknown, ""
+}
+
+func fixedVersions(patch task.CVEPatch) []string {
+	return append(append([]string{}, patch.FixedVersions...), patch.ProjectInfo.FixedVersions...)
+}
+
+func splitVersions(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func canonicalVersions(values []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range values {
+		got, ok := canonicalVersion(raw)
+		if !ok || seen[got] {
+			continue
+		}
+		seen[got] = true
+		out = append(out, got)
+	}
+	return out
+}
+
+func canonicalVersion(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(raw, "v") {
+		raw = "v" + raw
+	}
+	if !semver.IsValid(raw) {
+		return "", false
+	}
+	return semver.Canonical(raw), true
+}
+
+func lowestFixOnLine(installed string, fixes []string) (string, bool) {
+	line := semver.MajorMinor(installed)
+	best := ""
+	for _, fix := range fixes {
+		if semver.MajorMinor(fix) != line {
+			continue
+		}
+		if best == "" || semver.Compare(fix, best) < 0 {
+			best = fix
+		}
+	}
+	return best, best != ""
+}
+
+func uniqueVersions(values []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, v := range values {
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 func versionAfter(fields []string, pkg string) string {

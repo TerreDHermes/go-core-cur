@@ -32,11 +32,13 @@ func (f fakeSvc) Get(context.Context, string) (task.Task, error) {
 		ID: "1", Status: task.StatusCompleted, CVEID: "CVE-1",
 		ComponentURL: "https://example.com/r", Branch: "main", PackageName: "pkg",
 		Modules: []task.ModuleResult{{
-			GoModPath: "./go.mod",
-			Verdict:   "found",
-			ReportMD:  task.Report{GoModPath: "./go.mod", Narrative: "сначала проверили дерево"},
+			GoModPath:     "./go.mod",
+			Verdict:       "found",
+			Applicability: task.Applicable,
+			ReportMD:      task.Report{GoModPath: "./go.mod", Narrative: "сначала проверили дерево", Applicability: task.Applicable},
 		}},
-		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:01Z",
+		Applicability: task.Applicable,
+		CreatedAt:     "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:01Z",
 	}, nil
 }
 func (f fakeSvc) Report(context.Context, string) (string, string, error) {
@@ -94,7 +96,11 @@ func TestCreateAndList(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatal(rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"report_md":"сначала проверили дерево\n"`) || strings.Contains(rec.Body.String(), `"has_vendor"`) {
-		t.Fatal(rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, `"report_md":"сначала проверили дерево\n"`) || strings.Contains(body, `"has_vendor"`) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, `"duration_ms":1000`) || !strings.Contains(body, `"applicability":"applicable"`) {
+		t.Fatal(body)
 	}
 }

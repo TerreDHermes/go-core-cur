@@ -85,6 +85,9 @@ func TestReachableFalseWhenFunctionIsDead(t *testing.T) {
 	if !strings.Contains(got[0].ReportMD.PreVerdict, "уязвимый код недостижим") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
+	if got[0].Applicability != task.NotApplicable {
+		t.Fatal(got[0].Applicability)
+	}
 	if !strings.Contains(ai.prompts[0], "неприменима") || !strings.Contains(ai.prompts[0], "недостижим из main") {
 		t.Fatal(ai.prompts[0])
 	}
@@ -115,6 +118,9 @@ func TestReachableTrueWhenDeadcodeShowsPath(t *testing.T) {
 	if !strings.Contains(got[0].ReportMD.PreVerdict, "код достижим") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
+	if got[0].Applicability != task.Applicable {
+		t.Fatal(got[0].Applicability)
+	}
 	if !strings.Contains(ai.prompts[0], "достижима из main") {
 		t.Fatal(ai.prompts[0])
 	}
@@ -139,6 +145,9 @@ func TestDeadcodeFailureDoesNotMeanUnreachable(t *testing.T) {
 	}
 	if got[0].ReportMD.Reach == nil || got[0].ReportMD.Reach.Reachable != nil {
 		t.Fatalf("%+v", got[0].ReportMD.Reach)
+	}
+	if got[0].Applicability != task.Uncertain {
+		t.Fatal(got[0].Applicability)
 	}
 	if strings.Contains(got[0].ReportMD.PreVerdict, "уязвимости в этой сборке нет") {
 		t.Fatal(got[0].ReportMD.PreVerdict)

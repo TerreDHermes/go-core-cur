@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"cveanalysis/internal/task"
 
@@ -39,7 +40,31 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := ensureColumns(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+func ensureColumns(db *sql.DB) error {
+	if _, err := db.Exec(`ALTER TABLE analysis_tasks ADD COLUMN applicability TEXT`); err != nil && !isDupColumn(err) {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	for _, column := range []string{"started_at", "finished_at"} {
+		if _, err := db.Exec(`ALTER TABLE analysis_tasks DROP COLUMN ` + column); err != nil && !isMissingColumn(err) {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	return nil
+}
+
+func isDupColumn(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate column")
+}
+
+func isMissingColumn(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such column")
 }
 
 func (s *Store) Close() error {
@@ -85,8 +110,8 @@ func (s *Store) Complete(ctx context.Context, id string, modules []task.ModuleRe
 
 	res, err := tx.ExecContext(ctx, `
 		UPDATE analysis_tasks
-		SET status = 'COMPLETED', error_msg = NULL, updated_at = ?
-		WHERE id = ? AND status = 'RUNNING'`, updatedAt, id)
+		SET status = 'COMPLETED', error_msg = NULL, updated_at = ?, applicability = ?
+		WHERE id = ? AND status = 'RUNNING'`, updatedAt, task.RollupApplicability(modules), id)
 	if err != nil {
 		return fmt.Errorf("complete task: %w", err)
 	}
@@ -113,8 +138,8 @@ func (s *Store) Complete(ctx context.Context, id string, modules []task.ModuleRe
 func (s *Store) Fail(ctx context.Context, id, errMsg, updatedAt string) error {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE analysis_tasks
-		SET status = 'FAILED', error_msg = ?, updated_at = ?
-		WHERE id = ? AND status = 'RUNNING'`, errMsg, updatedAt, id)
+		SET status = 'FAILED', error_msg = ?, updated_at = ?, applicability = ?
+		WHERE id = ? AND status = 'RUNNING'`, errMsg, updatedAt, task.Uncertain, id)
 	if err != nil {
 		return fmt.Errorf("fail task: %w", err)
 	}
@@ -124,7 +149,8 @@ func (s *Store) Fail(ctx context.Context, id, errMsg, updatedAt string) error {
 func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, status, component_url, branch, cve_id, package_name,
-		       COALESCE(error_msg, ''), created_at, updated_at
+		       COALESCE(error_msg, ''), created_at, updated_at,
+		       COALESCE(applicability, '')
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -143,7 +169,8 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 func (s *Store) List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error) {
 	q := `
 		SELECT id, status, component_url, branch, cve_id, package_name,
-		       '', created_at, updated_at
+		       '', created_at, updated_at,
+		       COALESCE(applicability, '')
 		FROM analysis_tasks`
 	var args []any
 	if status != "" {
@@ -203,6 +230,7 @@ func scanTask(row scanner) (task.Task, error) {
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
 		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt,
+		&t.Applicability,
 	)
 	if err != nil {
 		return task.Task{}, err
@@ -232,6 +260,10 @@ func (s *Store) modules(ctx context.Context, taskID string) ([]task.ModuleResult
 			if err := json.Unmarshal([]byte(raw), &m.ReportMD); err != nil {
 				return nil, fmt.Errorf("decode report: %w", err)
 			}
+		}
+		m.Applicability = m.ReportMD.Applicability
+		if m.Applicability == "" {
+			m.Applicability = task.ClassifyVerdict(m.Verdict)
 		}
 		out = append(out, m)
 	}

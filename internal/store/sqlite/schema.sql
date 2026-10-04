@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     package_name TEXT NOT NULL,
     error_msg TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    applicability TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_created_at
