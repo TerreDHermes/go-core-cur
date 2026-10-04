@@ -424,7 +424,7 @@ func TestScanPromptTemplates(t *testing.T) {
 	for _, part := range []string{
 		`Потенциальная уязвимость CVE-2026-24051 (GHSA-abcd) пока не оценена для компонента "alertmanager"`,
 		`зависимость "go.opentelemetry.io/otel/sdk" версии "v1.43.0"`,
-		`проверка досягаемости не дала ответа`,
+		`нельзя установить, входит ли он в работающую программу`,
 		`"version": "v1.43.0"`,
 		"host_id.go",
 	} {
