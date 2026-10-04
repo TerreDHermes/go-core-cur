@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 
 // --- REAL API SERVICE ---
-const API_BASE = 'http://localhost:8741/api/v1/analysis';
+const API_BASE = `${window.location.protocol}//${window.location.hostname}:8741/api/v1/analysis`;
 
 const apiService = {
   createTask: async (data) => {

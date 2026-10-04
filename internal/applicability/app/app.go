@@ -43,7 +43,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	httpapi.NewHandler(svc, log).Register(mux)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           mux,
+		Handler:           httpapi.AllowBrowser(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

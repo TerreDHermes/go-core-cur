@@ -39,6 +39,21 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis/{id}/report", h.report)
 }
 
+// AllowBrowser lets a page on another port call this API.
+// The analysis form is served from :3000 and the API listens on :8741.
+func AllowBrowser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ComponentURL string `json:"component_url"`

@@ -45,6 +45,26 @@ func (f fakeSvc) Report(context.Context, string) (string, string, error) {
 	return "CVE-1", "./go.mod\n", nil
 }
 
+func TestAllowBrowserAnswersPreflight(t *testing.T) {
+	h := NewHandler(fakeSvc{created: "abc"}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/analysis", nil)
+	req.Header.Set("Origin", "http://d49.dev.k8s:3000")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	AllowBrowser(mux).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatal(rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Methods"), "POST") {
+		t.Fatal(rec.Header().Get("Access-Control-Allow-Methods"))
+	}
+}
+
 func TestCreateAndList(t *testing.T) {
 	h := NewHandler(fakeSvc{created: "abc"}, nil)
 	mux := http.NewServeMux()
