@@ -40,7 +40,7 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 	if got[0].ReportMD.Stage != task.StagePatchFiles || !strings.Contains(got[0].ReportMD.PreVerdict, "Ни один файл патча в vendor не найден") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
-	if got[0].Verdict != "model-verdict" || got[0].ReportMD.Version != "v1.2.3" || got[1].ReportMD.Version != "v1.2.3" {
+	if !strings.HasPrefix(got[0].Verdict, "Потенциальная уязвимость") || !strings.Contains(got[0].Verdict, "model-verdict") || got[0].ReportMD.Version != "v1.2.3" || got[1].ReportMD.Version != "v1.2.3" {
 		t.Fatalf("verdict %q versions %q %q", got[0].Verdict, got[0].ReportMD.Version, got[1].ReportMD.Version)
 	}
 	if got[0].Applicability != task.NotApplicable || got[1].Applicability != task.Uncertain {
@@ -133,7 +133,7 @@ func TestScanNotGoGrepsPatchAndReadsNotes(t *testing.T) {
 	if !strings.Contains(ai.prompts[1], "подробный журнал") || !strings.Contains(ai.prompts[1], "model-verdict") {
 		t.Fatal(ai.prompts[1])
 	}
-	if got[0].ReportMD.Narrative != "narrative-text" || got[0].Verdict != "model-verdict" {
+	if got[0].ReportMD.Narrative != "narrative-text" || !strings.HasPrefix(got[0].Verdict, "Потенциальная уязвимость") || !strings.Contains(got[0].Verdict, "model-verdict") {
 		t.Fatalf("verdict %q narrative %q", got[0].Verdict, got[0].ReportMD.Narrative)
 	}
 }
@@ -627,6 +627,28 @@ func TestScanFailsWhenAIFails(t *testing.T) {
 	_, err := Scan(context.Background(), Input{RepoPath: root, PackageName: "pkg"}, fakePatch{}, failAI{})
 	if err == nil || !strings.Contains(err.Error(), "ai verdict") {
 		t.Fatal(err)
+	}
+}
+
+func TestEnsureVerdictLeadRestoresTheOpening(t *testing.T) {
+	in := Input{ComponentURL: "https://github.com/acme/widgets", CVEID: "CVE-1", PackageName: "pkg"}
+	report := task.Report{Version: "v1.2.3", Grep: &task.GrepReport{}}
+	lead := verdictLead(in, report)
+	got := ensureVerdictLead(lead, "Дело в том, что описанного кода в проекте нет.")
+	if !strings.HasPrefix(got, `Потенциальная уязвимость CVE-1 неприменима к компоненту "widgets"`) || !strings.Contains(got, "Все дело в том, что описанного кода") {
+		t.Fatal(got)
+	}
+	if strings.Contains(got, "Дело в том, что Дело") || strings.Count(got, "Все дело в том, что") != 1 {
+		t.Fatal(got)
+	}
+	kept := ensureVerdictLead(lead, `Потенциальная уязвимость CVE-1 неприменима к компоненту "widgets". Все дело в том, что так и есть.`)
+	if !strings.HasPrefix(kept, "Потенциальная уязвимость") || strings.Count(kept, "Потенциальная уязвимость") != 1 {
+		t.Fatal(kept)
+	}
+	choice := grepChoice(in, task.Report{Version: "v1.2.3", Grep: &task.GrepReport{Hits: []task.GrepHit{{Path: "a.go"}}}})
+	picked := ensureVerdictLead(choice, "Все дело в том, что это не тот код, уязвимость неприменима.")
+	if !strings.Contains(picked, "похожий код к этой уязвимости не относится") || !strings.HasPrefix(picked, "Потенциальная уязвимость") {
+		t.Fatal(picked)
 	}
 }
 

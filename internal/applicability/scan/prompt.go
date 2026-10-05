@@ -17,19 +17,17 @@ func verdictPrompt(in Input, report task.Report) string {
 	rules := `Начни абзац ровно с текста ниже и сразу продолжи его после «Все дело в том, что».
 Объяснение возьми только из отчёта. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.
 Достижимость вызовов ещё не проверялась: если файл патча найден, уязвимый код в дереве есть; если все файлы патча отмечены false, уязвимого кода нет.`
-	opening := verdictOpening(in, report)
+	opening := verdictLead(in, report)
 	if patchFileFound(report) && (report.Reach == nil || report.Reach.Reachable == nil) {
 		rules = `Уязвимый код в дереве есть, но установить, входит ли он в работающую программу, не удалось.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
 Причину бери из reach.detail и перескажи её как ограничение мнения: сборка не прошла, в программе нет точки входа или вызов установить не удалось. Имена инструментов не называй. Не называй уязвимость применимой и не называй её неприменимой.`
-		opening = reachUnknownOpening(in, report)
 	} else if report.Grep != nil && len(report.Grep.Hits) == 0 {
 		rules = `Поиск по дереву не нашёл ни одного совпадения. Следов описанного кода нет.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
-Уязвимость неприменима. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
-		opening = grepNoneOpening(in, report)
+		Уязвимость неприменима. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
 	} else if report.Stage == task.StageNotGo && report.Grep != nil {
 		rules = `Проект не на Go: go.mod нет, deadcode не запускался. Реши по полю grep и по dev_notes, если они есть.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
@@ -37,8 +35,7 @@ func verdictPrompt(in Input, report task.Report) string {
 Если код в отчёте — это описанная уязвимость, выбери «применима». Если он про другое, выбери «неприменима». Если по коду нельзя понять, та ли это уязвимость, выбери «неопределенна» и напиши, чего не хватает для вывода.
 Поле grep.source равно "patch", когда материал взят из diff, и "description", когда из описания.
 Поле grep.excerpts — фрагменты кода, по ним и суди. В самом вердикте поля отчёта не называй.
-Не меняй идентификатор CVE, алиасы и имя компонента.`
-		opening = notGoChoice(in, report)
+		Не меняй идентификатор CVE, алиасы и имя компонента.`
 	} else if report.Reach != nil && report.Reach.Reachable != nil {
 		if *report.Reach.Reachable {
 			rules = `Файлы патча есть в дереве, и deadcode нашёл путь от main до уязвимой функции.
@@ -49,17 +46,15 @@ func verdictPrompt(in Input, report task.Report) string {
 			rules = `Файлы патча есть в дереве, но deadcode не нашёл пути от main до уязвимой функции.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
-Уязвимый код недостижим, уязвимости в этой сборке нет. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
+		Уязвимый код недостижим, уязвимости в этой сборке нет. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
 		}
-		opening = reachOpening(in, report, *report.Reach.Reachable)
 	} else if report.Grep != nil {
 		rules = `Патча нет. Реши по полю grep.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с одного из трёх вариантов ниже и сразу продолжи после «Все дело в том, что».
 Если код в отчёте — это описанная уязвимость, выбери «применима». Если он про другое, выбери «неприменима». Если по коду нельзя понять, та ли это уязвимость, выбери «неопределенна» и напиши, чего не хватает для вывода.
 Поле grep.excerpts — фрагменты кода. Смотри их целиком. В самом вердикте поля отчёта не называй.
-Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию. Входит ли код в работающую программу, здесь не проверялось.`
-		opening = grepChoice(in, report)
+		Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию. Входит ли код в работающую программу, здесь не проверялось.`
 	}
 	rules += "\nЕсли в отчёте есть dev_notes, учти их в продолжении, когда они относятся к уязвимости. Если поля нет, не упоминай заметки."
 	rules += "\nfixed_versions и версию зависимости для вывода не используй. Если уязвимость есть в списке, версия уже считается уязвимой. Решение только по тому, есть ли уязвимый код и входит ли он в программу."
@@ -72,6 +67,80 @@ func verdictPrompt(in Input, report task.Report) string {
 Отчёт:
 %s
 `, rules, opening, raw)
+}
+
+func verdictLead(in Input, report task.Report) string {
+	if patchFileFound(report) && (report.Reach == nil || report.Reach.Reachable == nil) {
+		return reachUnknownOpening(in, report)
+	}
+	if report.Grep != nil && len(report.Grep.Hits) == 0 {
+		return grepNoneOpening(in, report)
+	}
+	if report.Stage == task.StageNotGo && report.Grep != nil {
+		return notGoChoice(in, report)
+	}
+	if report.Reach != nil && report.Reach.Reachable != nil {
+		return reachOpening(in, report, *report.Reach.Reachable)
+	}
+	if report.Grep != nil {
+		return grepChoice(in, report)
+	}
+	return verdictOpening(in, report)
+}
+
+// ensureVerdictLead puts the required opening back when the model starts from the tail.
+func ensureVerdictLead(opening, text string) string {
+	text = strings.Trim(strings.TrimSpace(text), `"'«»`)
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "Потенциальная уязвимость") {
+		return text
+	}
+	lead := pickLead(opening, text)
+	rest := dropMatterClause(text)
+	if rest == "" {
+		return lead
+	}
+	return lead + " " + rest
+}
+
+func pickLead(opening, text string) string {
+	var lines []string
+	for _, line := range strings.Split(opening, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return strings.TrimSpace(opening)
+	}
+	if len(lines) == 1 {
+		return lines[0]
+	}
+	switch task.ClassifyVerdict(text) {
+	case task.Applicable:
+		return lines[0]
+	case task.NotApplicable:
+		if len(lines) > 1 {
+			return lines[1]
+		}
+	default:
+		if len(lines) > 2 {
+			return lines[2]
+		}
+	}
+	return lines[len(lines)-1]
+}
+
+func dropMatterClause(text string) string {
+	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"все дело в том, что", "дело в том, что", "все дело в том что", "дело в том что"} {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(trimmed[len(prefix):])
+		}
+	}
+	return trimmed
 }
 
 func notGoChoice(in Input, report task.Report) string {

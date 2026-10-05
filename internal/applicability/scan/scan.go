@@ -215,7 +215,7 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 		if err != nil {
 			return nil, fmt.Errorf("ai verdict for %s: %w", results[i].GoModPath, err)
 		}
-		text = strings.TrimSpace(text)
+		text = ensureVerdictLead(verdictLead(in, results[i].ReportMD), text)
 		if text == "" {
 			return nil, fmt.Errorf("ai verdict for %s is empty", results[i].GoModPath)
 		}
