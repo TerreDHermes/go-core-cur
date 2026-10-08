@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 
-// --- REAL API SERVICE ---
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:8741/api/v1/analysis`;
+const API_BASE = '/api/v1/analysis';
 
 const apiService = {
   createTask: async (data) => {
@@ -246,9 +245,30 @@ export default function ApplicabilityAnalysis() {
   const handleCopyVerdict = async () => {
     const activeModule = currentTask?.modules?.[selectedModuleIndex];
     if (!activeModule?.verdict) return;
-    await navigator.clipboard.writeText(activeModule.verdict);
-    setCopiedVerdict(true);
-    setTimeout(() => setCopiedVerdict(false), 2000);
+
+    // Старый надежный способ копирования, работающий даже по HTTP
+    const textArea = document.createElement("textarea");
+    textArea.value = activeModule.verdict;
+    
+    // Делаем элемент невидимым, но добавляем в DOM
+    textArea.style.position = "fixed";
+    textArea.style.left = "-9999px";
+    document.body.appendChild(textArea);
+    
+    // Выделяем текст и копируем
+    textArea.focus();
+    textArea.select();
+    
+    try {
+      document.execCommand('copy');
+      setCopiedVerdict(true);
+      setTimeout(() => setCopiedVerdict(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    } finally {
+      // Удаляем временный элемент
+      document.body.removeChild(textArea);
+    }
   };
 
   const renderStatusBadge = (status) => {
