@@ -233,7 +233,7 @@ function ModelPicker({ value, onChange }) {
       >
         <span style={{ minWidth: 0, textAlign: 'left' }}>
           <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.primary, lineHeight: 1.2 }}>Модель</span>
-          <span style={{ display: 'block', maxWidth: '168px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.92rem', fontWeight: '800', lineHeight: 1.3 }}>{label}</span>
+          <span style={{ display: 'block', maxWidth: '168px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.92rem', fontWeight: '600', lineHeight: 1.3 }}>{label}</span>
         </span>
         <span style={{
           width: '28px',
@@ -315,7 +315,7 @@ function ModelPicker({ value, onChange }) {
                   borderRadius: '0.7rem',
                   background: selected ? theme.primaryLight : 'transparent',
                   color: selected ? theme.primary : theme.textMain,
-                  fontWeight: selected ? '800' : '600',
+                  fontWeight: '600',
                   fontSize: '0.92rem',
                   cursor: 'pointer'
                 }}
