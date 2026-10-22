@@ -144,7 +144,7 @@ const ClockIcon = () => (
   </svg>
 );
 
-function ApiPlate() {
+function SwaggerButton() {
   return (
     <a
       href="/api/v1/analysis/docs/"
@@ -153,34 +153,22 @@ function ApiPlate() {
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '0.55rem',
-        width: 'fit-content',
-        marginBottom: '1.75rem',
-        padding: '0.4rem 0.85rem 0.4rem 0.4rem',
-        borderRadius: '9999px',
-        border: '1px solid #BFDBFE',
-        background: 'linear-gradient(135deg, #FFFFFF 0%, #EFF6FF 100%)',
+        justifyContent: 'center',
+        padding: '0.45rem 0.85rem',
+        borderRadius: '0.65rem',
+        border: `1px solid ${theme.primary}`,
+        background: '#FFFFFF',
         color: theme.primary,
-        textDecoration: 'none',
+        fontSize: '0.9rem',
         fontWeight: '700',
-        fontSize: '0.92rem',
-        boxShadow: '0 8px 18px -14px rgba(37, 99, 235, 0.9)'
+        lineHeight: 1.2,
+        textDecoration: 'none',
+        whiteSpace: 'nowrap'
       }}
+      onMouseEnter={e => { e.currentTarget.style.backgroundColor = theme.primary; e.currentTarget.style.color = '#fff'; }}
+      onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.color = theme.primary; }}
     >
-      <span style={{
-        padding: '0.22rem 0.5rem',
-        borderRadius: '9999px',
-        backgroundColor: theme.primary,
-        color: '#fff',
-        fontSize: '0.68rem',
-        fontWeight: '800',
-        letterSpacing: '0.06em'
-      }}>API</span>
-      спецификация OpenAPI
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M7 17L17 7" />
-        <path d="M8 7h9v9" />
-      </svg>
+      Swagger UI
     </a>
   );
 }
@@ -608,7 +596,7 @@ export default function ApplicabilityAnalysis() {
     return (
       <div style={fullPageStyle}>
         <div style={boardContainerStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3rem', flexWrap: 'wrap', gap: '1.5rem' }}>
             <div>
               <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>Список анализов</h1>
               <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>История проверок ({totalTasks} всего)</p>
@@ -624,8 +612,6 @@ export default function ApplicabilityAnalysis() {
               </button>
             </div>
           </div>
-
-          <ApiPlate />
 
           {taskList.length === 0 ? (
             <div style={{ ...innerCardStyle, textAlign: 'center', padding: '5rem', color: theme.textMuted }}>Список пуст</div>
@@ -731,7 +717,10 @@ export default function ApplicabilityAnalysis() {
   return (
     <div style={fullPageStyle}>
       <div style={boardContainerStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.85rem' }}>
+          <SwaggerButton />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3.5rem', flexWrap: 'wrap', gap: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
             <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: theme.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 8px 16px -4px rgba(37, 99, 235, 0.25)' }}>
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
@@ -752,8 +741,6 @@ export default function ApplicabilityAnalysis() {
             </button>
           </div>
         </div>
-
-        <ApiPlate />
 
         <div style={{ maxWidth: '850px', margin: '0 auto' }}>
           <div style={{ ...innerCardStyle, padding: '3rem' }}>
