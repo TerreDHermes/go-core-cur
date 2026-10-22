@@ -972,10 +972,11 @@ export default function ApplicabilityAnalysis() {
 
         <div style={{ maxWidth: '850px', margin: '0 auto' }}>
           <div style={{ ...innerCardStyle, padding: '3rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '2rem' }}>
               <h2 style={{ fontSize: '1.35rem', fontWeight: '800', color: theme.textMain, margin: 0 }}>Введите 4 параметра</h2>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.65rem' }}>
+                <ModelPicker value={selectedModel} onChange={setSelectedModel} />
                 {(formData.url || formData.branch || formData.cveId || formData.packageName) && (
                   <button
                     onClick={handleClearForm}
@@ -994,7 +995,6 @@ export default function ApplicabilityAnalysis() {
                     Очистить
                   </button>
                 )}
-                <ModelPicker value={selectedModel} onChange={setSelectedModel} />
               </div>
             </div>
 
