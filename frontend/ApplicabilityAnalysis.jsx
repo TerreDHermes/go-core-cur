@@ -194,58 +194,104 @@ function ModelPicker({ value, onChange }) {
     }
   };
 
-  const label = value || 'модель';
+  const label = value || 'не выбрана';
 
   return (
     <div ref={boxRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         type="button"
-        title={label}
+        title={value || 'Выбрать модель'}
+        aria-expanded={open}
+        aria-haspopup="listbox"
         onClick={openList}
         style={{
-          maxWidth: '240px',
-          padding: '0.55rem 0.9rem',
-          borderRadius: '0.75rem',
-          border: `1px solid ${open ? theme.primary : theme.border}`,
-          background: '#ffffff',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.7rem',
+          maxWidth: '280px',
+          padding: '0.4rem 0.45rem 0.4rem 0.85rem',
+          borderRadius: '0.9rem',
+          border: `1.5px solid ${open ? theme.primary : '#BFDBFE'}`,
+          background: open ? '#FFFFFF' : 'linear-gradient(180deg, #FFFFFF 0%, #F8FBFF 100%)',
+          boxShadow: open ? `0 0 0 4px ${theme.primaryLight}` : '0 8px 18px -14px rgba(37, 99, 235, 0.9)',
           color: theme.textMain,
-          fontSize: '0.9rem',
-          fontWeight: '700',
           cursor: 'pointer',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap'
+          transition: 'border-color 0.15s ease, box-shadow 0.15s ease'
+        }}
+        onMouseEnter={e => {
+          if (!open) {
+            e.currentTarget.style.borderColor = theme.primary;
+            e.currentTarget.style.boxShadow = `0 0 0 4px ${theme.primaryLight}`;
+          }
+        }}
+        onMouseLeave={e => {
+          if (!open) {
+            e.currentTarget.style.borderColor = '#BFDBFE';
+            e.currentTarget.style.boxShadow = '0 8px 18px -14px rgba(37, 99, 235, 0.9)';
+          }
         }}
       >
-        {label}
+        <span style={{ minWidth: 0, textAlign: 'left' }}>
+          <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.primary, lineHeight: 1.2 }}>Модель</span>
+          <span style={{ display: 'block', maxWidth: '168px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.92rem', fontWeight: '800', lineHeight: 1.3 }}>{label}</span>
+        </span>
+        <span style={{
+          width: '28px',
+          height: '28px',
+          borderRadius: '0.6rem',
+          background: open ? theme.primary : theme.primaryLight,
+          color: open ? '#fff' : theme.primary,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          transition: 'transform 0.18s ease, background 0.18s ease',
+          transform: open ? 'rotate(180deg)' : 'none'
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </span>
       </button>
       {open && (
-        <div style={{
-          position: 'absolute',
-          top: 'calc(100% + 0.4rem)',
-          right: 0,
-          zIndex: 20,
-          width: '280px',
-          maxHeight: '280px',
-          overflow: 'auto',
-          background: '#fff',
-          border: `1px solid ${theme.border}`,
-          borderRadius: '0.85rem',
-          boxShadow: '0 16px 40px -18px rgba(30, 41, 59, 0.45)',
-          padding: '0.4rem'
-        }}>
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 0.5rem)',
+            right: 0,
+            zIndex: 20,
+            width: '320px',
+            maxHeight: '320px',
+            overflow: 'auto',
+            background: '#fff',
+            border: `1px solid ${theme.primary}`,
+            borderRadius: '1rem',
+            boxShadow: '0 22px 44px -20px rgba(30, 41, 59, 0.45)',
+            padding: '0.45rem'
+          }}
+        >
           {loading && (
-            <div style={{ padding: '0.85rem 0.75rem', color: theme.textMuted, fontWeight: '600', fontSize: '0.92rem' }}>
-              ожидаем получения списка моделей
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', padding: '1rem 0.85rem', color: theme.primary }}>
+              <span style={{
+                width: '22px',
+                height: '22px',
+                borderRadius: '50%',
+                border: `2.5px solid ${theme.primaryLight}`,
+                borderTopColor: theme.primary,
+                flexShrink: 0,
+                animation: 'spin 0.8s linear infinite'
+              }} />
+              <span style={{ fontWeight: '700', fontSize: '0.95rem', lineHeight: 1.4 }}>Ожидаем получения списка моделей</span>
             </div>
           )}
           {!loading && error && (
-            <div style={{ padding: '0.85rem 0.75rem', color: theme.error.text, fontWeight: '600', fontSize: '0.92rem' }}>
+            <div style={{ margin: '0.25rem', padding: '0.9rem 0.85rem', borderRadius: '0.75rem', background: theme.error.bg, color: theme.error.text, fontWeight: '700', fontSize: '0.92rem', lineHeight: 1.45 }}>
               {error}
             </div>
           )}
           {!loading && !error && models.length === 0 && (
-            <div style={{ padding: '0.85rem 0.75rem', color: theme.textMuted, fontWeight: '600', fontSize: '0.92rem' }}>
+            <div style={{ padding: '1rem 0.85rem', color: theme.textMuted, fontWeight: '700', fontSize: '0.92rem' }}>
               Список моделей пуст
             </div>
           )}
@@ -255,27 +301,57 @@ function ModelPicker({ value, onChange }) {
               <button
                 key={name}
                 type="button"
+                role="option"
+                aria-selected={selected}
                 onClick={() => { onChange(name); setOpen(false); }}
                 style={{
-                  display: 'block',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.7rem',
                   width: '100%',
                   textAlign: 'left',
-                  padding: '0.7rem 0.75rem',
+                  padding: '0.72rem 0.75rem',
                   border: 'none',
-                  borderRadius: '0.6rem',
+                  borderRadius: '0.7rem',
                   background: selected ? theme.primaryLight : 'transparent',
                   color: selected ? theme.primary : theme.textMain,
                   fontWeight: selected ? '800' : '600',
                   fontSize: '0.92rem',
                   cursor: 'pointer'
                 }}
+                onMouseEnter={e => { if (!selected) e.currentTarget.style.backgroundColor = '#F8FAFC'; }}
+                onMouseLeave={e => { if (!selected) e.currentTarget.style.backgroundColor = 'transparent'; }}
               >
-                {name}
+                <span style={{
+                  width: '18px',
+                  height: '18px',
+                  borderRadius: '50%',
+                  border: `1.5px solid ${selected ? theme.primary : theme.borderDark}`,
+                  background: selected ? theme.primary : '#fff',
+                  color: '#fff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  {selected && (
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                </span>
+                <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{name}</span>
               </button>
             );
           })}
         </div>
       )}
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
