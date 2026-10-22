@@ -31,6 +31,7 @@ type Task struct {
 	Branch        string
 	CVEID         string
 	PackageName   string
+	Model         string
 	ErrorMsg      string
 	CreatedAt     string
 	UpdatedAt     string
@@ -52,6 +53,7 @@ type CreateInput struct {
 	Branch       string
 	CVEID        string
 	PackageName  string
+	Model        string
 }
 
 // CombinedReport joins every module report into one markdown document.

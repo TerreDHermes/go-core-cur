@@ -18,6 +18,60 @@
     }
   ],
   "paths": {
+    "/api/v1/analysis/default-model": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "defaultAnalysisModel",
+        "summary": "Модель по умолчанию",
+        "description": "Имя из AI_MODEL. Форма показывает его до выбора другой модели.",
+        "responses": {
+          "200": {
+            "description": "Модель из окружения",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["model"],
+                  "properties": { "model": { "type": "string", "example": "env-model" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analysis/models": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "listAnalysisModels",
+        "summary": "Список доступных моделей",
+        "description": "Прокси к GET /v1/models контура модели. Токен остаётся на сервере.",
+        "responses": {
+          "200": {
+            "description": "Имена моделей",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["models"],
+                  "properties": {
+                    "models": { "type": "array", "items": { "type": "string" }, "example": ["env-model", "other-model"] }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Контур модели не ответил",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "503": {
+            "description": "Список моделей не настроен",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
     "/api/v1/analysis": {
       "post": {
         "tags": ["analysis"],
@@ -268,6 +322,11 @@
             "type": "string",
             "description": "Имя уязвимого модуля. `root` ищет файлы патча от корня репозитория.",
             "example": "example"
+          },
+          "model": {
+            "type": "string",
+            "description": "Модель для этого анализа. Пустое значение — модель из AI_MODEL.",
+            "example": "env-model"
           }
         }
       },
@@ -303,6 +362,10 @@
           "component_url": { "type": "string" },
           "branch": { "type": "string" },
           "package_name": { "type": "string" },
+          "model": {
+            "type": "string",
+            "description": "Модель, которой считался этот анализ."
+          },
           "created_at": { "type": "string", "format": "date-time" },
           "duration_ms": {
             "type": "integer",

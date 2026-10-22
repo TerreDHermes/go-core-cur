@@ -50,13 +50,17 @@ go run ./cmd/server
 | `CVE_PATCH_BASE` | `http://d49.dev.k8s:8080` | База ручки `GET /cve/patch/{cve_id}` |
 | `AI_BASE_URL` | пусто | Полный URL чата модели. Пустой URL роняет задачу на шаге вердикта |
 | `AI_TOKEN` | пусто | Bearer-токен модели |
-| `AI_MODEL` | пусто | Имя модели в теле запроса |
+| `AI_MODEL` | пусто | Модель по умолчанию. Новый анализ начинает с неё, в запросе можно передать другую `model` |
 
 ## API
 
 Swagger UI открывается по `GET /api/v1/analysis/docs/`, спецификация — `GET /api/v1/analysis/openapi.json`. В Swagger можно нажать Try it out: создать задачу, взять `id` из ответа и тем же экраном запросить статус и результат. Страница и Swagger живут на одном пути `/api/v1/analysis`, поэтому прокси перед формой должен отдавать весь этот префикс, включая `/docs/` и `/openapi.json`.
 
-`POST /api/v1/analysis` — создать задачу, ответ `202` и `{"id":"..."}`.
+`GET /api/v1/analysis/default-model` — `{"model":"..."}`, имя из `AI_MODEL`. Токен модели наружу не отдаётся.
+
+`GET /api/v1/analysis/models` — `{"models":["..."]}`. Сервер ходит в `GET /v1/models` того же контура, что и чат, с `AI_TOKEN`.
+
+`POST /api/v1/analysis` — создать задачу, ответ `202` и `{"id":"..."}`. Поле `model` необязательное: пустое значит модель из `AI_MODEL`. Выбранное имя сохраняется в задаче и уходит в запросы к модели.
 
 ```bash
 curl -s -X POST localhost:8741/api/v1/analysis \

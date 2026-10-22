@@ -21,8 +21,16 @@ type Service interface {
 }
 
 type Handler struct {
-	svc Service
-	log *slog.Logger
+	svc          Service
+	log          *slog.Logger
+	defaultModel string
+	listModels   func(context.Context) ([]string, error)
+}
+
+// UseModels serves the env model and the upstream model list. The token stays on the server.
+func (h *Handler) UseModels(defaultModel string, list func(context.Context) ([]string, error)) {
+	h.defaultModel = strings.TrimSpace(defaultModel)
+	h.listModels = list
 }
 
 func NewHandler(svc Service, log *slog.Logger) *Handler {
@@ -35,6 +43,8 @@ func NewHandler(svc Service, log *slog.Logger) *Handler {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/analysis", h.create)
 	mux.HandleFunc("GET /api/v1/analysis", h.list)
+	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
+	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
 	mux.HandleFunc("GET /api/v1/analysis/{id}/report", h.report)
 	mountDocs(mux)
@@ -61,6 +71,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		Branch       string `json:"branch"`
 		CVEID        string `json:"cve_id"`
 		PackageName  string `json:"package_name"`
+		Model        string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
@@ -71,6 +82,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		Branch:       body.Branch,
 		CVEID:        body.CVEID,
 		PackageName:  body.PackageName,
+		Model:        body.Model,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -117,6 +129,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			ComponentURL:  t.ComponentURL,
 			Branch:        t.Branch,
 			PackageName:   t.PackageName,
+			Model:         t.Model,
 			CreatedAt:     t.CreatedAt,
 			DurationMS:    t.DurationMS(),
 			Applicability: t.PublicApplicability(),
@@ -135,6 +148,7 @@ type taskSummary struct {
 	ComponentURL  string  `json:"component_url"`
 	Branch        string  `json:"branch"`
 	PackageName   string  `json:"package_name"`
+	Model         string  `json:"model"`
 	CreatedAt     string  `json:"created_at"`
 	DurationMS    *int64  `json:"duration_ms"`
 	Applicability *string `json:"applicability"`
@@ -169,6 +183,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		Branch:        t.Branch,
 		CVEID:         t.CVEID,
 		PackageName:   t.PackageName,
+		Model:         t.Model,
 		Modules:       modules,
 		ErrorMsg:      t.ErrorMsg,
 		CreatedAt:     t.CreatedAt,
@@ -185,6 +200,7 @@ type taskResponse struct {
 	Branch        string           `json:"branch"`
 	CVEID         string           `json:"cve_id"`
 	PackageName   string           `json:"package_name"`
+	Model         string           `json:"model"`
 	Modules       []moduleResponse `json:"modules"`
 	ErrorMsg      string           `json:"error_msg"`
 	CreatedAt     string           `json:"created_at"`
@@ -198,6 +214,27 @@ type moduleResponse struct {
 	Verdict       string `json:"verdict"`
 	Applicability string `json:"applicability"`
 	ReportMD      string `json:"report_md"`
+}
+
+func (h *Handler) defaultModelHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"model": h.defaultModel})
+}
+
+func (h *Handler) modelsHandler(w http.ResponseWriter, r *http.Request) {
+	if h.listModels == nil {
+		writeError(w, http.StatusServiceUnavailable, "model list is not configured")
+		return
+	}
+	names, err := h.listModels(r.Context())
+	if err != nil {
+		h.log.Error("list models", "err", err)
+		writeError(w, http.StatusBadGateway, "failed to fetch models")
+		return
+	}
+	if names == nil {
+		names = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": names})
 }
 
 func (h *Handler) report(w http.ResponseWriter, r *http.Request) {

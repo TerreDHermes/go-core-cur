@@ -14,7 +14,7 @@ func TestClaimIsAtomic(t *testing.T) {
 	item := task.Task{
 		ID: "id-1", Status: task.StatusPending,
 		ComponentURL: "https://example.com/r.git", Branch: "main",
-		CVEID: "CVE-1", PackageName: "pkg",
+		CVEID: "CVE-1", PackageName: "pkg", Model: "env-model",
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 	}
 	if err := st.Create(ctx, item); err != nil {
@@ -40,7 +40,7 @@ func TestClaimIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != task.StatusCompleted || len(got.Modules) != 1 || got.Modules[0].GoModPath != "./go.mod" {
+	if got.Status != task.StatusCompleted || got.Model != "env-model" || len(got.Modules) != 1 || got.Modules[0].GoModPath != "./go.mod" {
 		t.Fatalf("%+v", got)
 	}
 	if got.Applicability != task.Uncertain {

@@ -17,9 +17,15 @@ type Enqueuer interface {
 }
 
 type Service struct {
-	store store.Store
-	queue Enqueuer
-	now   func() time.Time
+	store        store.Store
+	queue        Enqueuer
+	now          func() time.Time
+	defaultModel string
+}
+
+// SetDefaultModel is the model from AI_MODEL. Create uses it when the request omits a model.
+func (s *Service) SetDefaultModel(model string) {
+	s.defaultModel = strings.TrimSpace(model)
 }
 
 func New(st store.Store, queue Enqueuer) *Service {
@@ -37,8 +43,12 @@ func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, erro
 	in.Branch = strings.TrimSpace(in.Branch)
 	in.CVEID = strings.TrimSpace(in.CVEID)
 	in.PackageName = strings.TrimSpace(in.PackageName)
+	in.Model = strings.TrimSpace(in.Model)
 	if in.ComponentURL == "" || in.Branch == "" || in.CVEID == "" || in.PackageName == "" {
 		return "", fmt.Errorf("%w: component_url, branch, cve_id and package_name are required", task.ErrInvalidInput)
+	}
+	if in.Model == "" {
+		in.Model = s.defaultModel
 	}
 
 	now := s.now().UTC().Format(time.RFC3339Nano)
@@ -49,6 +59,7 @@ func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, erro
 		Branch:       in.Branch,
 		CVEID:        in.CVEID,
 		PackageName:  in.PackageName,
+		Model:        in.Model,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}

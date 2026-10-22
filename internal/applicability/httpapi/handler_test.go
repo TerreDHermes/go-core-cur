@@ -120,6 +120,29 @@ func TestSwaggerServesSpecAndUI(t *testing.T) {
 	}
 }
 
+func TestModelEndpoints(t *testing.T) {
+	h := NewHandler(fakeSvc{created: "abc"}, nil)
+	h.UseModels("env-model", func(context.Context) ([]string, error) {
+		return []string{"env-model", "other-model"}, nil
+	})
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/default-model", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"model":"env-model"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/models", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"other-model"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateAndList(t *testing.T) {
 	h := NewHandler(fakeSvc{created: "abc"}, nil)
 	mux := http.NewServeMux()

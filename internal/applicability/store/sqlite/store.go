@@ -48,8 +48,13 @@ func Open(path string) (*Store, error) {
 }
 
 func ensureColumns(db *sql.DB) error {
-	if _, err := db.Exec(`ALTER TABLE analysis_tasks ADD COLUMN applicability TEXT`); err != nil && !isDupColumn(err) {
-		return fmt.Errorf("migrate: %w", err)
+	for _, stmt := range []string{
+		`ALTER TABLE analysis_tasks ADD COLUMN applicability TEXT`,
+		`ALTER TABLE analysis_tasks ADD COLUMN model TEXT`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !isDupColumn(err) {
+			return fmt.Errorf("migrate: %w", err)
+		}
 	}
 	for _, column := range []string{"started_at", "finished_at"} {
 		if _, err := db.Exec(`ALTER TABLE analysis_tasks DROP COLUMN ` + column); err != nil && !isMissingColumn(err) {
@@ -74,10 +79,10 @@ func (s *Store) Close() error {
 func (s *Store) Create(ctx context.Context, t task.Task) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO analysis_tasks (
-			id, status, component_url, branch, cve_id, package_name,
+			id, status, component_url, branch, cve_id, package_name, model,
 			error_msg, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-		t.ID, string(t.Status), t.ComponentURL, t.Branch, t.CVEID, t.PackageName,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+		t.ID, string(t.Status), t.ComponentURL, t.Branch, t.CVEID, t.PackageName, t.Model,
 		t.CreatedAt, t.UpdatedAt,
 	)
 	if err != nil {
@@ -150,7 +155,7 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       COALESCE(error_msg, ''), created_at, updated_at,
-		       COALESCE(applicability, '')
+		       COALESCE(applicability, ''), COALESCE(model, '')
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -170,7 +175,7 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 	q := `
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       '', created_at, updated_at,
-		       COALESCE(applicability, '')
+		       COALESCE(applicability, ''), COALESCE(model, '')
 		FROM analysis_tasks`
 	var args []any
 	if status != "" {
@@ -244,7 +249,7 @@ func scanTask(row scanner) (task.Task, error) {
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
 		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt,
-		&t.Applicability,
+		&t.Applicability, &t.Model,
 	)
 	if err != nil {
 		return task.Task{}, err

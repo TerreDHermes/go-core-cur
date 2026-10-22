@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     branch TEXT NOT NULL,
     cve_id TEXT NOT NULL,
     package_name TEXT NOT NULL,
+    model TEXT,
     error_msg TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,

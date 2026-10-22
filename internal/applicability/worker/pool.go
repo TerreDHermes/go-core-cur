@@ -146,6 +146,7 @@ func (p *Pool) handle(id string) {
 		Branch:       t.Branch,
 		CVEID:        t.CVEID,
 		PackageName:  t.PackageName,
+		Model:        t.Model,
 	})
 	if err != nil {
 		p.fail(id, err)

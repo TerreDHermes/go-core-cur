@@ -33,14 +33,18 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	defer st.Close()
 
+	aiClient := ai.NewAIClient(cfg.AIBaseURL, cfg.AIToken, cfg.AIModel)
 	pool := worker.New(st, gitrepo.Client{Token: cfg.GitToken}, scan.Client{
 		Patches: cveapi.New(cfg.CVEPatchBase),
-		AI:      ai.NewAIClient(cfg.AIBaseURL, cfg.AIToken, cfg.AIModel),
+		AI:      aiClient,
 	}, cfg.WorkerCount, cfg.QueueSize, cfg.GitTimeout, log)
 	svc := tasksvc.New(st, pool)
+	svc.SetDefaultModel(cfg.AIModel)
 
 	mux := http.NewServeMux()
-	httpapi.NewHandler(svc, log).Register(mux)
+	h := httpapi.NewHandler(svc, log)
+	h.UseModels(cfg.AIModel, aiClient.ListModels)
+	h.Register(mux)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           httpapi.AllowBrowser(mux),

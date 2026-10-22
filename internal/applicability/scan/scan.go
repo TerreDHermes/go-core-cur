@@ -14,6 +14,7 @@ type Input struct {
 	Branch       string
 	CVEID        string
 	PackageName  string
+	Model        string
 }
 
 // PatchSource loads the CVE patch document. The orchestrator calls it once per repository.

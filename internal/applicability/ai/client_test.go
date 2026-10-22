@@ -61,3 +61,48 @@ func TestCallAIReturnsStatusBody(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWithModelLeavesTheOriginalClient(t *testing.T) {
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotModel = string(body)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	base := NewAIClient(srv.URL+"/v1/chat/completions", "secret", "env-model")
+	if _, err := base.WithModel("picked-model").CallAI(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotModel, `"model":"picked-model"`) {
+		t.Fatal(gotModel)
+	}
+	if base.Model != "env-model" {
+		t.Fatal(base.Model)
+	}
+	if ModelsURL(base.BaseURL) != srv.URL+"/v1/models" {
+		t.Fatal(ModelsURL(base.BaseURL))
+	}
+}
+
+func TestListModelsReadsIDs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			t.Fatal(r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"a"},{"id":" b "},{"id":"a"},{"id":""}]}`))
+	}))
+	defer srv.Close()
+
+	names, err := NewAIClient(srv.URL+"/v1/chat/completions", "secret", "env-model").ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(names, ",") != "a,b" {
+		t.Fatal(names)
+	}
+}

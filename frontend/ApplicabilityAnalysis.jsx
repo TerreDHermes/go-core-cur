@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 
 const API_BASE = '/api/v1/analysis';
@@ -12,7 +12,8 @@ const apiService = {
         component_url: data.url,
         branch: data.branch,
         cve_id: data.cveId,
-        package_name: data.packageName
+        package_name: data.packageName,
+        model: data.model
       })
     });
 
@@ -41,7 +42,21 @@ const apiService = {
     return res.json();
   },
 
-  downloadReportUrl: (id) => `${API_BASE}/${id}/report`
+  downloadReportUrl: (id) => `${API_BASE}/${id}/report`,
+
+  getDefaultModel: async () => {
+    const res = await fetch(`${API_BASE}/default-model`);
+    if (!res.ok) throw new Error('Failed to fetch default model');
+    const data = await res.json();
+    return data.model || '';
+  },
+
+  listModels: async () => {
+    const res = await fetch(`${API_BASE}/models`);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || 'Не удалось получить список моделей');
+    return json.models || [];
+  }
 };
 
 // --- THEME & STYLES ---
@@ -144,6 +159,127 @@ const ClockIcon = () => (
   </svg>
 );
 
+function ModelPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [models, setModels] = useState([]);
+  const [error, setError] = useState('');
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (boxRef.current && !boxRef.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  const openList = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    setLoading(true);
+    setError('');
+    setModels([]);
+    try {
+      const list = await apiService.listModels();
+      setModels(list);
+    } catch (err) {
+      setError(err.message || 'Не удалось получить список моделей');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const label = value || 'модель';
+
+  return (
+    <div ref={boxRef} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        type="button"
+        title={label}
+        onClick={openList}
+        style={{
+          maxWidth: '240px',
+          padding: '0.55rem 0.9rem',
+          borderRadius: '0.75rem',
+          border: `1px solid ${open ? theme.primary : theme.border}`,
+          background: '#ffffff',
+          color: theme.textMain,
+          fontSize: '0.9rem',
+          fontWeight: '700',
+          cursor: 'pointer',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }}
+      >
+        {label}
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 0.4rem)',
+          right: 0,
+          zIndex: 20,
+          width: '280px',
+          maxHeight: '280px',
+          overflow: 'auto',
+          background: '#fff',
+          border: `1px solid ${theme.border}`,
+          borderRadius: '0.85rem',
+          boxShadow: '0 16px 40px -18px rgba(30, 41, 59, 0.45)',
+          padding: '0.4rem'
+        }}>
+          {loading && (
+            <div style={{ padding: '0.85rem 0.75rem', color: theme.textMuted, fontWeight: '600', fontSize: '0.92rem' }}>
+              ожидаем получения списка моделей
+            </div>
+          )}
+          {!loading && error && (
+            <div style={{ padding: '0.85rem 0.75rem', color: theme.error.text, fontWeight: '600', fontSize: '0.92rem' }}>
+              {error}
+            </div>
+          )}
+          {!loading && !error && models.length === 0 && (
+            <div style={{ padding: '0.85rem 0.75rem', color: theme.textMuted, fontWeight: '600', fontSize: '0.92rem' }}>
+              Список моделей пуст
+            </div>
+          )}
+          {!loading && !error && models.map((name) => {
+            const selected = name === value;
+            return (
+              <button
+                key={name}
+                type="button"
+                onClick={() => { onChange(name); setOpen(false); }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '0.7rem 0.75rem',
+                  border: 'none',
+                  borderRadius: '0.6rem',
+                  background: selected ? theme.primaryLight : 'transparent',
+                  color: selected ? theme.primary : theme.textMain,
+                  fontWeight: selected ? '800' : '600',
+                  fontSize: '0.92rem',
+                  cursor: 'pointer'
+                }}
+              >
+                {name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SwaggerButton() {
   return (
     <a
@@ -201,9 +337,21 @@ export default function ApplicabilityAnalysis() {
   const itemsPerPage = 10;
 
   const [selectedModuleIndex, setSelectedModuleIndex] = useState(0);
+  const [selectedModel, setSelectedModel] = useState('');
 
   const isDetailView = !!taskId;
   const isListView = location.pathname.includes('/list');
+
+  useEffect(() => {
+    if (isDetailView || isListView) return undefined;
+    let cancelled = false;
+    apiService.getDefaultModel()
+      .then((model) => {
+        if (!cancelled) setSelectedModel((current) => current || model);
+      })
+      .catch((err) => console.error('Error loading default model:', err));
+    return () => { cancelled = true; };
+  }, [isDetailView, isListView]);
 
   useEffect(() => {
     if (isListView) {
@@ -247,7 +395,7 @@ export default function ApplicabilityAnalysis() {
     setCreateError('');
 
     try {
-      const result = await apiService.createTask(formData);
+      const result = await apiService.createTask({ ...formData, model: selectedModel });
       window.location.href = `/analysis/${result.id}`;
     } catch (err) {
       setCreateError(err.message || 'Произошла неизвестная ошибка при создании задачи');
@@ -458,6 +606,10 @@ export default function ApplicabilityAnalysis() {
                 <div>
                   <span style={{ color: theme.textMuted, fontWeight: '600', display: 'block', marginBottom: '0.4rem', fontSize: '0.8rem', textTransform: 'uppercase' }}>Пакет</span>
                   <b style={{ wordBreak: 'break-all', color: theme.primary }}>{currentTask.package_name}</b>
+                </div>
+                <div>
+                  <span style={{ color: theme.textMuted, fontWeight: '600', display: 'block', marginBottom: '0.4rem', fontSize: '0.8rem', textTransform: 'uppercase' }}>Модель</span>
+                  <b style={{ wordBreak: 'break-all', color: theme.primary }}>{currentTask.model || '—'}</b>
                 </div>
               </div>
             </div>
@@ -744,27 +896,30 @@ export default function ApplicabilityAnalysis() {
 
         <div style={{ maxWidth: '850px', margin: '0 auto' }}>
           <div style={{ ...innerCardStyle, padding: '3rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
               <h2 style={{ fontSize: '1.35rem', fontWeight: '800', color: theme.textMain, margin: 0 }}>Введите 4 параметра</h2>
 
-              {(formData.url || formData.branch || formData.cveId || formData.packageName) && (
-                <button
-                  onClick={handleClearForm}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-                    padding: '0.6rem 1.25rem', borderRadius: '0.75rem',
-                    border: `1px solid ${theme.border}`, background: '#ffffff',
-                    color: theme.textMuted, fontSize: '0.9rem', fontWeight: '600',
-                    cursor: 'pointer', transition: 'all 0.2s',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#FEF2F2'; e.currentTarget.style.borderColor = '#FCA5A5'; e.currentTarget.style.color = '#991B1B'; }}
-                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#ffffff'; e.currentTarget.style.borderColor = theme.border; e.currentTarget.style.color = theme.textMuted; }}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
-                  Очистить
-                </button>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                {(formData.url || formData.branch || formData.cveId || formData.packageName) && (
+                  <button
+                    onClick={handleClearForm}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                      padding: '0.6rem 1.25rem', borderRadius: '0.75rem',
+                      border: `1px solid ${theme.border}`, background: '#ffffff',
+                      color: theme.textMuted, fontSize: '0.9rem', fontWeight: '600',
+                      cursor: 'pointer', transition: 'all 0.2s',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#FEF2F2'; e.currentTarget.style.borderColor = '#FCA5A5'; e.currentTarget.style.color = '#991B1B'; }}
+                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#ffffff'; e.currentTarget.style.borderColor = theme.border; e.currentTarget.style.color = theme.textMuted; }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                    Очистить
+                  </button>
+                )}
+                <ModelPicker value={selectedModel} onChange={setSelectedModel} />
+              </div>
             </div>
 
             {createError && (

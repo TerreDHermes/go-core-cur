@@ -84,9 +84,92 @@ func (c *AIClient) CallAI(ctx context.Context, prompt string) (string, error) {
 	return aiResp.Choices[0].Message.Content, nil
 }
 
+// WithModel returns a copy that calls the given model. The original client stays on its own model,
+// so parallel tasks can use different models.
+func (c *AIClient) WithModel(model string) *AIClient {
+	if c == nil {
+		return nil
+	}
+	next := *c
+	if name := strings.TrimSpace(model); name != "" {
+		next.Model = name
+	}
+	return &next
+}
+
 // Explain is the scan-facing name for CallAI.
 func (c *AIClient) Explain(ctx context.Context, prompt string) (string, error) {
 	return c.CallAI(ctx, prompt)
+}
+
+// ModelsURL is the OpenAI-compatible model list for a chat URL.
+// https://host/v1/chat/completions becomes https://host/v1/models.
+func ModelsURL(chatURL string) string {
+	u := strings.TrimRight(strings.TrimSpace(chatURL), "/")
+	switch {
+	case strings.HasSuffix(u, "/chat/completions"):
+		return strings.TrimSuffix(u, "/chat/completions") + "/models"
+	case strings.HasSuffix(u, "/completions"):
+		return strings.TrimSuffix(u, "/completions") + "/models"
+	default:
+		return u + "/models"
+	}
+}
+
+// ListModels calls GET /models with the same token as chat completions.
+func (c *AIClient) ListModels(ctx context.Context) ([]string, error) {
+	if c == nil || c.BaseURL == "" {
+		return nil, fmt.Errorf("ai base url is empty")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ModelsURL(c.BaseURL), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AuthToken)
+
+	httpClient := c.Client
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do models request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read models response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("models API returned %d: %s", resp.StatusCode, trimBody(body))
+	}
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode models response: %w", err)
+	}
+	names := make([]string, 0, len(parsed.Data))
+	seen := map[string]bool{}
+	for _, item := range parsed.Data {
+		name := strings.TrimSpace(item.ID)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func trimBody(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if len(text) > 300 {
+		return text[:300]
+	}
+	return text
 }
 
 type AIRequestMessage struct {
