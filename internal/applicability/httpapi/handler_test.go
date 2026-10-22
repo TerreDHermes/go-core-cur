@@ -65,6 +65,61 @@ func TestAllowBrowserAnswersPreflight(t *testing.T) {
 	}
 }
 
+func TestSwaggerServesSpecAndUI(t *testing.T) {
+	h := NewHandler(fakeSvc{created: "abc"}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("spec status %d body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatal(rec.Header().Get("Content-Type"))
+	}
+	body := rec.Body.String()
+	for _, part := range []string{`"openapi"`, "/api/v1/analysis/{id}", "createAnalysis", "getAnalysis"} {
+		if !strings.Contains(body, part) {
+			t.Fatalf("spec missing %s", part)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/docs", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("docs redirect %d", rec.Code)
+	}
+	if rec.Header().Get("Location") != "/api/v1/analysis/docs/" {
+		t.Fatal(rec.Header().Get("Location"))
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/docs/", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ui status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatal(rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Body.String(), "/api/v1/analysis/openapi.json") || !strings.Contains(rec.Body.String(), "SwaggerUIBundle") {
+		t.Fatal(rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/docs/swagger-ui-bundle.js", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bundle status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "SwaggerUIBundle") {
+		t.Fatal("bundle did not contain SwaggerUIBundle")
+	}
+}
+
 func TestCreateAndList(t *testing.T) {
 	h := NewHandler(fakeSvc{created: "abc"}, nil)
 	mux := http.NewServeMux()

@@ -37,6 +37,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis", h.list)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
 	mux.HandleFunc("GET /api/v1/analysis/{id}/report", h.report)
+	mountDocs(mux)
 }
 
 // AllowBrowser lets a page on another port call this API.

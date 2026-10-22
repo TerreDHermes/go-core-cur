@@ -54,6 +54,8 @@ go run ./cmd/server
 
 ## API
 
+Swagger UI открывается по `GET /api/v1/analysis/docs/`, спецификация — `GET /api/v1/analysis/openapi.json`. В Swagger можно нажать Try it out: создать задачу, взять `id` из ответа и тем же экраном запросить статус и результат. Страница и Swagger живут на одном пути `/api/v1/analysis`, поэтому прокси перед формой должен отдавать весь этот префикс, включая `/docs/` и `/openapi.json`.
+
 `POST /api/v1/analysis` — создать задачу, ответ `202` и `{"id":"..."}`.
 
 ```bash

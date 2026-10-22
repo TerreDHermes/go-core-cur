@@ -1,0 +1,382 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Анализ применимости CVE",
+    "version": "1.0.0",
+    "description": "Сервис ставит задачу на анализ Git-репозитория и потом отдаёт статус и вывод.\n\nПорядок такой: `POST /api/v1/analysis` возвращает `id`. Дальше `GET /api/v1/analysis/{id}` — пока задача в очереди или в работе, `applicability` равен `null`. Когда статус `COMPLETED`, в ответе есть признак применимости и модули с вердиктом. `FAILED` отдаёт `error_msg` и `applicability` = `uncertain`.\n\n`applicability`: `applicable` — уязвимость применима хотя бы в одном модуле, `not_applicable` — неприменима во всех, `uncertain` — применимых нет, но вывод не уверенный."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Тот хост, с которого открыт Swagger"
+    }
+  ],
+  "tags": [
+    {
+      "name": "analysis",
+      "description": "Задачи анализа применимости"
+    }
+  ],
+  "paths": {
+    "/api/v1/analysis": {
+      "post": {
+        "tags": ["analysis"],
+        "operationId": "createAnalysis",
+        "summary": "Создать задачу",
+        "description": "Ставит анализ в очередь. В ответе только `id` созданной задачи. Все четыре поля обязательны.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateAnalysisRequest" },
+              "example": {
+                "component_url": "https://github.com/golang/example",
+                "branch": "master",
+                "cve_id": "CVE-2024-0001",
+                "package_name": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Задача создана и поставлена в очередь",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreateAnalysisResponse" },
+                "example": { "id": "8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11" }
+              }
+            }
+          },
+          "400": {
+            "description": "Тело не JSON или не хватает поля",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "examples": {
+                  "json": { "value": { "error": "invalid JSON" } },
+                  "fields": { "value": { "error": "invalid input: component_url, branch, cve_id and package_name are required" } }
+                }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      },
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "listAnalyses",
+        "summary": "Список задач",
+        "description": "Короткие карточки без вердикта и отчёта. `total` — сколько записей подходит под тот же фильтр `status`, без учёта `limit` и `offset`.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Размер страницы. По умолчанию 10, больше 100 обрезается до 100.",
+            "schema": { "type": "integer", "minimum": 1, "default": 10 }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Смещение от начала списка. Не может быть отрицательным.",
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Необязательный фильтр по статусу.",
+            "schema": { "$ref": "#/components/schemas/Status" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Страница списка",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnalysisList" },
+                "example": {
+                  "items": [
+                    {
+                      "id": "8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11",
+                      "status": "COMPLETED",
+                      "cve_id": "CVE-2024-0001",
+                      "component_url": "https://github.com/golang/example",
+                      "branch": "master",
+                      "package_name": "example",
+                      "created_at": "2026-01-01T00:00:00Z",
+                      "duration_ms": 1200,
+                      "applicability": "not_applicable"
+                    }
+                  ],
+                  "total": 1
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Неверные limit, offset или status",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    },
+    "/api/v1/analysis/{id}": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "getAnalysis",
+        "summary": "Статус и результат по id",
+        "description": "Полная задача. Пока статус `PENDING` или `RUNNING`, `applicability` равен `null`, а `modules` пустой. У `COMPLETED` у каждого модуля есть `verdict`, `applicability` и журнал `report_md`. У `FAILED` заполнен `error_msg`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор из ответа на создание задачи.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Задача найдена",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnalysisTask" },
+                "examples": {
+                  "running": {
+                    "summary": "Ещё считается",
+                    "value": {
+                      "id": "8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11",
+                      "status": "RUNNING",
+                      "component_url": "https://github.com/golang/example",
+                      "branch": "master",
+                      "cve_id": "CVE-2024-0001",
+                      "package_name": "example",
+                      "modules": [],
+                      "error_msg": "",
+                      "created_at": "2026-01-01T00:00:00Z",
+                      "updated_at": "2026-01-01T00:00:05Z",
+                      "duration_ms": 5000,
+                      "applicability": null
+                    }
+                  },
+                  "completed": {
+                    "summary": "Готовый вывод",
+                    "value": {
+                      "id": "8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11",
+                      "status": "COMPLETED",
+                      "component_url": "https://github.com/golang/example",
+                      "branch": "master",
+                      "cve_id": "CVE-2024-0001",
+                      "package_name": "example",
+                      "modules": [
+                        {
+                          "go_mod_path": "go.mod",
+                          "verdict": "Потенциальная уязвимость CVE-2024-0001 неприменима, хоть и зависимость есть версии v1.2.3. Все дело в том, что описанный уязвимый код в эту программу не входит.",
+                          "applicability": "not_applicable",
+                          "report_md": "Сначала проверили дерево исходников.\n"
+                        }
+                      ],
+                      "error_msg": "",
+                      "created_at": "2026-01-01T00:00:00Z",
+                      "updated_at": "2026-01-01T00:06:28Z",
+                      "duration_ms": 388000,
+                      "applicability": "not_applicable"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Задачи с таким id нет",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "task not found" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    },
+    "/api/v1/analysis/{id}/report": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "downloadAnalysisReport",
+        "summary": "Скачать отчёт",
+        "description": "Журнал анализа одним markdown-файлом. Отдаётся только для статуса `COMPLETED`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Файл отчёта",
+            "content": {
+              "text/markdown": {
+                "schema": { "type": "string" },
+                "example": "# go.mod\n\nСначала проверили дерево исходников.\n"
+              }
+            }
+          },
+          "404": {
+            "description": "Задачи с таким id нет",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "409": {
+            "description": "Задача ещё не завершена",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "task is not completed" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateAnalysisRequest": {
+        "type": "object",
+        "required": ["component_url", "branch", "cve_id", "package_name"],
+        "properties": {
+          "component_url": {
+            "type": "string",
+            "description": "Git-адрес репозитория. Подходит HTTPS и git@host:path.",
+            "example": "https://github.com/golang/example"
+          },
+          "branch": { "type": "string", "example": "master" },
+          "cve_id": {
+            "type": "string",
+            "description": "CVE ID или алиас.",
+            "example": "CVE-2024-0001"
+          },
+          "package_name": {
+            "type": "string",
+            "description": "Имя уязвимого модуля. `root` ищет файлы патча от корня репозитория.",
+            "example": "example"
+          }
+        }
+      },
+      "CreateAnalysisResponse": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Идентификатор задачи. Его передают в GET, чтобы узнать статус и результат.",
+            "example": "8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11"
+          }
+        }
+      },
+      "AnalysisList": {
+        "type": "object",
+        "required": ["items", "total"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/AnalysisSummary" }
+          },
+          "total": { "type": "integer", "example": 1 }
+        }
+      },
+      "AnalysisSummary": {
+        "type": "object",
+        "required": ["id", "status", "cve_id", "component_url", "branch", "package_name", "created_at"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/Status" },
+          "cve_id": { "type": "string" },
+          "component_url": { "type": "string" },
+          "branch": { "type": "string" },
+          "package_name": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "updated_at минус created_at, в миллисекундах."
+          },
+          "applicability": { "$ref": "#/components/schemas/Applicability" }
+        }
+      },
+      "AnalysisTask": {
+        "allOf": [
+          { "$ref": "#/components/schemas/AnalysisSummary" },
+          {
+            "type": "object",
+            "required": ["modules", "error_msg", "updated_at"],
+            "properties": {
+              "modules": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/AnalysisModule" }
+              },
+              "error_msg": { "type": "string" },
+              "updated_at": { "type": "string", "format": "date-time" }
+            }
+          }
+        ]
+      },
+      "AnalysisModule": {
+        "type": "object",
+        "required": ["go_mod_path", "verdict", "applicability", "report_md"],
+        "properties": {
+          "go_mod_path": { "type": "string", "example": "go.mod" },
+          "verdict": {
+            "type": "string",
+            "description": "Итоговый вывод по этому модулю."
+          },
+          "applicability": {
+            "type": "string",
+            "enum": ["applicable", "not_applicable", "uncertain"]
+          },
+          "report_md": {
+            "type": "string",
+            "description": "Журнал анализа текстом."
+          }
+        }
+      },
+      "Status": {
+        "type": "string",
+        "enum": ["PENDING", "RUNNING", "COMPLETED", "FAILED"]
+      },
+      "Applicability": {
+        "type": "string",
+        "nullable": true,
+        "enum": ["applicable", "not_applicable", "uncertain"],
+        "description": "null, пока задача не завершена."
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "Internal": {
+        "description": "Внутренняя ошибка",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": "internal error" }
+          }
+        }
+      }
+    }
+  }
+}
