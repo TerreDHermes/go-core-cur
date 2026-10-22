@@ -144,198 +144,44 @@ const ClockIcon = () => (
   </svg>
 );
 
-const apiEndpoints = [
-  {
-    step: '1',
-    method: 'POST',
-    path: '/api/v1/analysis',
-    title: 'Создать задачу',
-    text: 'Ответ 202 содержит id. Его сохраняют и дальше читают по нему статус и результат.',
-    sample: `{
-  "component_url": "https://github.com/golang/example",
-  "branch": "master",
-  "cve_id": "CVE-2024-0001",
-  "package_name": "example"
-}
-
-202
-{ "id": "8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11" }`
-  },
-  {
-    step: '2',
-    method: 'GET',
-    path: '/api/v1/analysis/{id}',
-    title: 'Статус и результат',
-    text: 'Пока статус PENDING или RUNNING, applicability равен null. COMPLETED отдаёт applicability и modules: у модуля свои verdict и report_md. FAILED отдаёт error_msg.',
-    sample: `{
-  "status": "COMPLETED",
-  "applicability": "not_applicable",
-  "duration_ms": 388000,
-  "modules": [
-    {
-      "go_mod_path": "go.mod",
-      "applicability": "not_applicable",
-      "verdict": "Потенциальная уязвимость … неприменима. Все дело в том, что …",
-      "report_md": "…"
-    }
-  ]
-}`
-  },
-  {
-    step: '3',
-    method: 'GET',
-    path: '/api/v1/analysis/{id}/report',
-    title: 'Скачать отчёт',
-    text: 'Тот же журнал одним markdown-файлом. Доступен только у COMPLETED, иначе ответ 409.'
-  },
-  {
-    step: '·',
-    method: 'GET',
-    path: '/api/v1/analysis?limit=10&offset=0',
-    title: 'Список задач',
-    text: 'Короткие карточки без вердикта: items и total. Фильтр status необязателен: PENDING, RUNNING, COMPLETED, FAILED.',
-    sample: `{ "items": [], "total": 0 }`
-  }
-];
-
 function ApiPlate() {
-  const [open, setOpen] = useState(false);
-  const methodColor = (method) => (method === 'POST' ? theme.primary : '#0F766E');
-
   return (
-    <div style={{ marginBottom: '2.25rem' }}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '1rem',
-          textAlign: 'left',
-          padding: '1.05rem 1.25rem',
-          borderRadius: open ? '1rem 1rem 0 0' : '1rem',
-          border: `1px solid ${open ? theme.primary : '#BFDBFE'}`,
-          borderBottom: open ? 'none' : `1px solid #BFDBFE`,
-          background: 'linear-gradient(135deg, #FFFFFF 0%, #EFF6FF 100%)',
-          cursor: 'pointer',
-          boxShadow: open ? 'none' : '0 10px 24px -16px rgba(37, 99, 235, 0.65)'
-        }}
-      >
-        <span style={{
-          flexShrink: 0,
-          padding: '0.35rem 0.7rem',
-          borderRadius: '9999px',
-          backgroundColor: theme.primary,
-          color: '#fff',
-          fontSize: '0.78rem',
-          fontWeight: '800',
-          letterSpacing: '0.08em'
-        }}>API</span>
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ display: 'block', fontWeight: '800', fontSize: '1.05rem', color: theme.textMain }}>Здесь можно посмотреть API</span>
-          <span style={{ display: 'block', marginTop: '0.2rem', color: theme.textMuted, fontSize: '0.92rem', fontWeight: '600' }}>Создать задачу, получить id, затем статус и результат анализа</span>
-        </span>
-        <span style={{
-          flexShrink: 0,
-          width: '36px',
-          height: '36px',
-          borderRadius: '9999px',
-          border: `1px solid ${theme.border}`,
-          background: '#fff',
-          color: theme.primary,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontWeight: '800',
-          transform: open ? 'rotate(180deg)' : 'none',
-          transition: 'transform 0.2s ease'
-        }}>↓</span>
-      </button>
-
-      {open && (
-        <div style={{
-          border: `1px solid ${theme.primary}`,
-          borderRadius: '0 0 1rem 1rem',
-          background: 'rgba(255,255,255,0.82)',
-          padding: '1.25rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.85rem'
-        }}>
-          <p style={{ margin: 0, color: theme.textMain, fontWeight: '600', fontSize: '0.98rem', lineHeight: 1.55 }}>
-            Сначала POST, из ответа берёте id. Затем GET по этому id, пока status не станет COMPLETED или FAILED.
-          </p>
-          {apiEndpoints.map((endpoint) => (
-            <div key={endpoint.path} style={{
-              background: '#fff',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '0.9rem',
-              padding: '1rem 1.1rem'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', flexWrap: 'wrap', marginBottom: '0.45rem' }}>
-                <span style={{
-                  width: '1.6rem',
-                  height: '1.6rem',
-                  borderRadius: '9999px',
-                  background: theme.primaryLight,
-                  color: theme.primary,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: '800',
-                  fontSize: '0.85rem',
-                  flexShrink: 0
-                }}>{endpoint.step}</span>
-                <span style={{
-                  padding: '0.15rem 0.5rem',
-                  borderRadius: '0.4rem',
-                  background: methodColor(endpoint.method),
-                  color: '#fff',
-                  fontSize: '0.75rem',
-                  fontWeight: '800',
-                  letterSpacing: '0.04em'
-                }}>{endpoint.method}</span>
-                <code style={{ color: theme.textMain, fontWeight: '700', fontSize: '0.95rem', wordBreak: 'break-all' }}>{endpoint.path}</code>
-              </div>
-              <div style={{ fontWeight: '800', color: theme.textMain, marginBottom: '0.3rem' }}>{endpoint.title}</div>
-              <div style={{ color: theme.textMuted, fontSize: '0.92rem', lineHeight: 1.5 }}>{endpoint.text}</div>
-              {endpoint.sample && (
-                <pre style={{
-                  margin: '0.75rem 0 0',
-                  padding: '0.85rem 1rem',
-                  borderRadius: '0.7rem',
-                  background: '#F8FAFC',
-                  border: `1px solid ${theme.border}`,
-                  color: theme.textMain,
-                  fontSize: '0.82rem',
-                  lineHeight: 1.55,
-                  overflow: 'auto',
-                  whiteSpace: 'pre-wrap'
-                }}>{endpoint.sample}</pre>
-              )}
-            </div>
-          ))}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', paddingTop: '0.25rem' }}>
-            <span style={{ color: theme.textMuted, fontSize: '0.9rem', fontWeight: '600' }}>В Swagger эти же ручки можно вызвать и посмотреть ответ.</span>
-            <a href="/api/v1/analysis/docs/" target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.45rem',
-                padding: '0.7rem 1.1rem',
-                borderRadius: '0.75rem',
-                background: theme.primary,
-                color: '#fff',
-                fontWeight: '800',
-                boxShadow: '0 8px 16px -8px rgba(37, 99, 235, 0.8)'
-              }}>Открыть Swagger</span>
-            </a>
-          </div>
-        </div>
-      )}
-    </div>
+    <a
+      href="/api/v1/analysis/docs/"
+      target="_blank"
+      rel="noreferrer"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.55rem',
+        width: 'fit-content',
+        marginBottom: '1.75rem',
+        padding: '0.4rem 0.85rem 0.4rem 0.4rem',
+        borderRadius: '9999px',
+        border: '1px solid #BFDBFE',
+        background: 'linear-gradient(135deg, #FFFFFF 0%, #EFF6FF 100%)',
+        color: theme.primary,
+        textDecoration: 'none',
+        fontWeight: '700',
+        fontSize: '0.92rem',
+        boxShadow: '0 8px 18px -14px rgba(37, 99, 235, 0.9)'
+      }}
+    >
+      <span style={{
+        padding: '0.22rem 0.5rem',
+        borderRadius: '9999px',
+        backgroundColor: theme.primary,
+        color: '#fff',
+        fontSize: '0.68rem',
+        fontWeight: '800',
+        letterSpacing: '0.06em'
+      }}>API</span>
+      спецификация OpenAPI
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M7 17L17 7" />
+        <path d="M8 7h9v9" />
+      </svg>
+    </a>
   );
 }
 
@@ -530,7 +376,7 @@ export default function ApplicabilityAnalysis() {
     return (
       <div style={fullPageStyle}>
         <div style={boardContainerStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3rem', flexWrap: 'wrap', gap: '1.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
               <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: theme.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 8px 16px -4px rgba(37, 99, 235, 0.25)' }}>
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
@@ -554,8 +400,6 @@ export default function ApplicabilityAnalysis() {
               </button>
             </div>
           </div>
-
-          <ApiPlate />
 
           <div style={{ ...innerCardStyle, marginBottom: '2.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1.25rem' }}>
