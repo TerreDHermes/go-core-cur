@@ -387,7 +387,15 @@
                 "type": "array",
                 "items": { "$ref": "#/components/schemas/AnalysisModule" }
               },
-              "error_msg": { "type": "string" },
+              "error_msg": { "type": "string", "description": "Сырой текст ошибки." },
+              "error_source": {
+                "type": "string",
+                "description": "Кто виноват: AI HUB, CVE Patch Analyzer, Сервис патчей или Git. Считается по тексту ошибки, без модели."
+              },
+              "error_hint": {
+                "type": "string",
+                "description": "Короткая фраза для человека. Подробности остаются в error_msg."
+              },
               "updated_at": { "type": "string", "format": "date-time" }
             }
           }

@@ -176,6 +176,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 			ReportMD:      m.ReportMD.PublicText(),
 		})
 	}
+	blame := task.BlameError(t.ErrorMsg)
 	writeJSON(w, http.StatusOK, taskResponse{
 		ID:            t.ID,
 		Status:        string(t.Status),
@@ -186,6 +187,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		Model:         t.Model,
 		Modules:       modules,
 		ErrorMsg:      t.ErrorMsg,
+		ErrorSource:   blame.Source,
+		ErrorHint:     blame.Hint,
 		CreatedAt:     t.CreatedAt,
 		UpdatedAt:     t.UpdatedAt,
 		DurationMS:    t.DurationMS(),
@@ -203,6 +206,8 @@ type taskResponse struct {
 	Model         string           `json:"model"`
 	Modules       []moduleResponse `json:"modules"`
 	ErrorMsg      string           `json:"error_msg"`
+	ErrorSource   string           `json:"error_source,omitempty"`
+	ErrorHint     string           `json:"error_hint,omitempty"`
 	CreatedAt     string           `json:"created_at"`
 	UpdatedAt     string           `json:"updated_at"`
 	DurationMS    *int64           `json:"duration_ms"`

@@ -356,6 +356,54 @@ function ModelPicker({ value, onChange }) {
   );
 }
 
+function blameError(message) {
+  const lower = (message || '').toLowerCase();
+  if (!lower.trim()) return null;
+  const ai = ['ai api returned', 'do ai request', 'ai grep', 'ai verdict', 'ai report', 'ai client', 'ai base url', 'ai response', 'api.ai.sbt', 'rate_limit', 'admission_queue']
+    .some((part) => lower.includes(part));
+  if (ai) {
+    if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('too many requests') || lower.includes('admission_queue')) {
+      return { source: 'AI HUB', hint: 'AI HUB ограничил запросы: лимит или очередь переполнена.' };
+    }
+    if (lower.includes('deadline exceeded') || lower.includes('timeout')) {
+      return { source: 'AI HUB', hint: 'AI HUB не ответил за отведённое время.' };
+    }
+    return { source: 'AI HUB', hint: 'Ошибка на стороне AI HUB.' };
+  }
+  if (lower.includes('cve patch')) return { source: 'Сервис патчей', hint: 'Не удалось получить патч уязвимости.' };
+  if (lower.includes('git clone') || lower.includes('git checkout') || lower.includes('repository url')) {
+    if (lower.includes('deadline exceeded') || lower.includes('timeout')) {
+      return { source: 'Git', hint: 'Репозиторий не скачался за отведённое время.' };
+    }
+    return { source: 'Git', hint: 'Не удалось получить репозиторий.' };
+  }
+  if (lower.includes('deadcode')) return { source: 'CVE Patch Analyzer', hint: 'В анализе не найден инструмент deadcode.' };
+  return { source: 'CVE Patch Analyzer', hint: 'Ошибка на стороне CVE Patch Analyzer.' };
+}
+
+function taskBlame(task) {
+  if (!task?.error_msg) return null;
+  if (task.error_source) return { source: task.error_source, hint: task.error_hint || '' };
+  return blameError(task.error_msg);
+}
+
+function ErrorDetails({ task }) {
+  const blame = taskBlame(task);
+  return (
+    <div style={{ textAlign: 'left' }}>
+      {blame && (
+        <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
+          <div style={{ fontSize: '0.78rem', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.error.text, opacity: 0.8 }}>Виноват</div>
+          <div style={{ marginTop: '0.35rem', fontSize: '1.55rem', fontWeight: '800', color: theme.error.text }}>{blame.source}</div>
+          {blame.hint && <div style={{ marginTop: '0.45rem', fontSize: '1.05rem', fontWeight: '600', color: theme.error.text }}>{blame.hint}</div>}
+        </div>
+      )}
+      <div style={{ fontSize: '0.78rem', fontWeight: '800', letterSpacing: '0.05em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.4rem' }}>Подробности</div>
+      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', fontSize: '0.92rem', lineHeight: 1.55, fontWeight: '500', color: theme.error.text }}>{task.error_msg}</pre>
+    </div>
+  );
+}
+
 function SwaggerButton() {
   return (
     <a
@@ -749,9 +797,9 @@ export default function ApplicabilityAnalysis() {
             {(isRunning || isPending) ? (
               <div style={{ padding: '3rem', textAlign: 'center', color: theme.textMuted, fontWeight: '500', fontSize: '1.2rem', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>Информация появится после завершения анализа</div>
             ) : isError ? (
-              <div style={{ padding: '3rem', textAlign: 'center', color: theme.error.text, fontWeight: '700', fontSize: '1.2rem', border: `1px solid ${theme.error.border}`, borderRadius: '1rem', backgroundColor: theme.error.bg, borderLeft: `8px solid ${theme.error.accent}` }}>
-                Анализ завершился с ошибкой<br />
-                <span style={{ fontSize: '1rem', fontWeight: '500', marginTop: '0.5rem', display: 'block' }}>{currentTask.error_msg}</span>
+              <div style={{ padding: '2rem 2.25rem', color: theme.error.text, fontWeight: '700', fontSize: '1.2rem', border: `1px solid ${theme.error.border}`, borderRadius: '1rem', backgroundColor: theme.error.bg, borderLeft: `8px solid ${theme.error.accent}` }}>
+                <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>Анализ завершился с ошибкой</div>
+                <ErrorDetails task={currentTask} />
               </div>
             ) : (
               <div style={{
@@ -794,8 +842,8 @@ export default function ApplicabilityAnalysis() {
           <div>
             <h2 style={{ fontSize: '1.35rem', fontWeight: '800', marginBottom: '1.5rem', color: theme.textMain }}>Полный отчет</h2>
             {(isRunning || isError || isPending) ? (
-              <div style={{ padding: '3rem', textAlign: 'center', color: theme.textMuted, fontWeight: '500', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
-                {isError ? `Ошибка: ${currentTask.error_msg}` : 'Отчет сформируется позже'}
+              <div style={{ padding: isError ? '2rem 2.25rem' : '3rem', textAlign: isError ? 'left' : 'center', color: theme.textMuted, fontWeight: '500', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
+                {isError ? <ErrorDetails task={currentTask} /> : 'Отчет сформируется позже'}
               </div>
             ) : (
               <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.7)', borderRadius: '1rem', border: `1px solid rgba(203, 213, 225, 0.8)`, overflow: 'hidden' }}>

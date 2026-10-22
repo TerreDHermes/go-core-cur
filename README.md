@@ -74,7 +74,7 @@ curl -s -X POST localhost:8741/api/v1/analysis \
 
 `applicability` — один признак на всю задачу: `applicable` (уязвимость применима), `not_applicable` (неприменима) или `uncertain` (неопределенно). Пока анализа нет, поле `null`. У `FAILED` оно `uncertain`. Если модулей несколько, достаточно одного `applicable`, чтобы задача стала `applicable`. Если применимых нет, но есть `uncertain`, задача `uncertain`. `not_applicable` ставится, только когда такой вывод у каждого модуля.
 
-`GET /api/v1/analysis/{id}` — полная задача. У каждого модуля свой `applicability` с теми же тремя значениями и `report_md` — строка с журналом анализа. `duration_ms` и `applicability` задачи те же, что в списке.
+`GET /api/v1/analysis/{id}` — полная задача. У каждого модуля свой `applicability` с теми же тремя значениями и `report_md` — строка с журналом анализа. `duration_ms` и `applicability` задачи те же, что в списке. У ошибки рядом с `error_msg` есть `error_source` и `error_hint`: кто виноват, по тексту, который сервис уже записал. Модель для этого не вызывается. `AI HUB` — шлюз модели, `Сервис патчей` — ручка патча, `Git` — клон репозитория, остальное — `CVE Patch Analyzer`.
 
 `GET /api/v1/analysis/{id}/report` — тот же журнал текстом, только для `COMPLETED`.
 
