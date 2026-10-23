@@ -1002,8 +1002,8 @@ export default function ApplicabilityAnalysis() {
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
             </div>
             <div>
-              <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>Анализ применимости уязвимости</h1>
-              <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>Быстрая проверка репозитория на наличие CVE.</p>
+              <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>CVE Verdict</h1>
+              <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>Запусти анализ применимости уязвимости к конкретному проекту</p>
             </div>
           </div>
           <div style={navBtnGroupStyle}>
