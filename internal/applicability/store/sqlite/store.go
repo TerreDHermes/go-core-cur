@@ -171,6 +171,22 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 	return t, nil
 }
 
+func (s *Store) LatestID(ctx context.Context, componentURL, branch, cveID, packageName string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id FROM analysis_tasks
+		WHERE component_url = ? AND branch = ? AND cve_id = ? AND package_name = ?
+		ORDER BY created_at DESC, rowid DESC
+		LIMIT 1`, componentURL, branch, cveID, packageName).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", task.ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("latest task: %w", err)
+	}
+	return id, nil
+}
+
 func (s *Store) List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error) {
 	q := `
 		SELECT id, status, component_url, branch, cve_id, package_name,

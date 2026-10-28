@@ -2,6 +2,7 @@ package tasksvc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -70,6 +71,27 @@ func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, erro
 		return "", fmt.Errorf("enqueue task: %w", err)
 	}
 	return t.ID, nil
+}
+
+// Open returns the newest analysis with the same four fields.
+// When none exists, it creates one with the default model and enqueues it.
+func (s *Service) Open(ctx context.Context, in task.CreateInput) (string, error) {
+	in.ComponentURL = strings.TrimSpace(in.ComponentURL)
+	in.Branch = strings.TrimSpace(in.Branch)
+	in.CVEID = strings.TrimSpace(in.CVEID)
+	in.PackageName = strings.TrimSpace(in.PackageName)
+	if in.ComponentURL == "" || in.Branch == "" || in.CVEID == "" || in.PackageName == "" {
+		return "", fmt.Errorf("%w: component_url, branch, cve_id and package_name are required", task.ErrInvalidInput)
+	}
+	id, err := s.store.LatestID(ctx, in.ComponentURL, in.Branch, in.CVEID, in.PackageName)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, task.ErrNotFound) {
+		return "", err
+	}
+	in.Model = ""
+	return s.Create(ctx, in)
 }
 
 func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, int, error) {

@@ -12,6 +12,7 @@ type Store interface {
 	Complete(ctx context.Context, id string, modules []task.ModuleResult, updatedAt string) error
 	Fail(ctx context.Context, id, errMsg, updatedAt string) error
 	Get(ctx context.Context, id string) (task.Task, error)
+	LatestID(ctx context.Context, componentURL, branch, cveID, packageName string) (string, error)
 	List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error)
 	Count(ctx context.Context, status task.Status) (int, error)
 	ListPendingIDs(ctx context.Context) ([]string, error)

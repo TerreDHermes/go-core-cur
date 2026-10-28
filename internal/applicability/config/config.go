@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type Config struct {
 	AIBaseURL    string
 	AIToken      string
 	AIModel      string
+	WebBaseURL   string
 }
 
 func Load() (Config, error) {
@@ -32,6 +34,7 @@ func Load() (Config, error) {
 		AIBaseURL:    os.Getenv("AI_BASE_URL"),
 		AIToken:      os.Getenv("AI_TOKEN"),
 		AIModel:      os.Getenv("AI_MODEL"),
+		WebBaseURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("WEB_BASE_URL")), "/"),
 	}
 
 	if v := os.Getenv("WORKER_COUNT"); v != "" {

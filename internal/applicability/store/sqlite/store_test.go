@@ -119,6 +119,14 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	if len(pending) != 1 || pending[0] != "a" {
 		t.Fatalf("%v", pending)
 	}
+
+	latest, err := st.LatestID(ctx, "u", "b", "c", "p")
+	if err != nil || latest != "b" {
+		t.Fatalf("latest %s err %v", latest, err)
+	}
+	if _, err := st.LatestID(ctx, "u", "b", "c", "other"); err != task.ErrNotFound {
+		t.Fatal(err)
+	}
 }
 
 func openTest(t *testing.T) *Store {

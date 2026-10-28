@@ -19,6 +19,9 @@ type fakeSvc struct {
 func (f fakeSvc) Create(context.Context, task.CreateInput) (string, error) {
 	return f.created, nil
 }
+func (f fakeSvc) Open(context.Context, task.CreateInput) (string, error) {
+	return f.created, nil
+}
 func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, int, error) {
 	return []task.Task{{
 		ID: "1", Status: task.StatusPending, CVEID: "CVE-1",
@@ -80,7 +83,7 @@ func TestSwaggerServesSpecAndUI(t *testing.T) {
 		t.Fatal(rec.Header().Get("Content-Type"))
 	}
 	body := rec.Body.String()
-	for _, part := range []string{`"openapi"`, "/api/v1/analysis/{id}", "createAnalysis", "getAnalysis"} {
+	for _, part := range []string{`"openapi"`, "/api/v1/analysis/{id}", "createAnalysis", "getAnalysis", "openAnalysis"} {
 		if !strings.Contains(body, part) {
 			t.Fatalf("spec missing %s", part)
 		}
@@ -211,4 +214,43 @@ func TestCreateAndList(t *testing.T) {
 	if !strings.Contains(body, `"duration_ms":1000`) || !strings.Contains(body, `"applicability":"applicable"`) {
 		t.Fatal(body)
 	}
+}
+
+func TestOpenRedirectsToAnalysisPage(t *testing.T) {
+	h := NewHandler(fakeSvc{created: "abc"}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/open?component_url=u&branch=b&cve_id=c&package_name=p", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Location") != "/analysis/abc" {
+		t.Fatal(rec.Header().Get("Location"))
+	}
+
+	h.UseWebBase("http://ui.example/")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "http://ui.example/analysis/abc" {
+		t.Fatalf("%d %s", rec.Code, rec.Header().Get("Location"))
+	}
+
+	h = NewHandler(openErrSvc{}, nil)
+	mux = http.NewServeMux()
+	h.Register(mux)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/open?component_url=u", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+type openErrSvc struct{ fakeSvc }
+
+func (openErrSvc) Open(context.Context, task.CreateInput) (string, error) {
+	return "", task.ErrInvalidInput
 }

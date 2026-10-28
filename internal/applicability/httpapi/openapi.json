@@ -3,7 +3,7 @@
   "info": {
     "title": "Анализ применимости CVE",
     "version": "1.0.0",
-    "description": "Сервис ставит задачу на анализ Git-репозитория и потом отдаёт статус и вывод.\n\nПорядок такой: `POST /api/v1/analysis` возвращает `id`. Дальше `GET /api/v1/analysis/{id}` — пока задача в очереди или в работе, `applicability` равен `null`. Когда статус `COMPLETED`, в ответе есть признак применимости и модули с вердиктом. `FAILED` отдаёт `error_msg` и `applicability` = `uncertain`.\n\n`applicability`: `applicable` — уязвимость применима хотя бы в одном модуле, `not_applicable` — неприменима во всех, `uncertain` — применимых нет, но вывод не уверенный."
+    "description": "Сервис ставит задачу на анализ Git-репозитория и потом отдаёт статус и вывод.\n\nПорядок такой: `POST /api/v1/analysis` возвращает `id`. Дальше `GET /api/v1/analysis/{id}` — пока задача в очереди или в работе, `applicability` равен `null`. Когда статус `COMPLETED`, в ответе есть признак применимости и модули с вердиктом. `FAILED` отдаёт `error_msg` и `applicability` = `uncertain`.\n\nКнопка с дашборда открывает `GET /api/v1/analysis/open`: сервер находит последний анализ по четырём параметрам или создаёт новый и перенаправляет браузер на страницу анализа.\n\n`applicability`: `applicable` — уязвимость применима хотя бы в одном модуле, `not_applicable` — неприменима во всех, `uncertain` — применимых нет, но вывод не уверенный."
   },
   "servers": [
     {
@@ -69,6 +69,67 @@
             "description": "Список моделей не настроен",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
           }
+        }
+      }
+    },
+    "/api/v1/analysis/open": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "openAnalysis",
+        "summary": "Открыть анализ по четырём параметрам",
+        "description": "Ссылка для кнопки «Посмотреть анализ в CVE Verdict». Браузер открывает этот адрес, в ответе редирект на страницу анализа.\n\nСервер ищет самый новый анализ с теми же `component_url`, `branch`, `cve_id` и `package_name`. Сравнение точное, пробелы по краям отбрасываются. Алиас и CVE ID — разные строки. Статус не важен: откроется и готовый анализ, и ещё идущий, и упавший с ошибкой.\n\nЕсли совпадения нет, создаётся новый анализ с моделью из `AI_MODEL` и ставится в очередь. Редирект ведёт уже на него.\n\n`Location` — путь `/analysis/{id}` на том же хосте. Если задан `WEB_BASE_URL`, адрес абсолютный: `{WEB_BASE_URL}/analysis/{id}`.",
+        "parameters": [
+          {
+            "name": "component_url",
+            "in": "query",
+            "required": true,
+            "description": "Git-адрес репозитория.",
+            "schema": { "type": "string", "example": "https://github.com/golang/example" }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "example": "master" }
+          },
+          {
+            "name": "cve_id",
+            "in": "query",
+            "required": true,
+            "description": "CVE ID или алиас. Ищется ровно та строка, с которой анализ был создан.",
+            "schema": { "type": "string", "example": "CVE-2024-0001" }
+          },
+          {
+            "name": "package_name",
+            "in": "query",
+            "required": true,
+            "description": "Имя уязвимого пакета.",
+            "schema": { "type": "string", "example": "example" }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Страница анализа. Если подходящей задачи не было, она создана и поставлена в очередь.",
+            "headers": {
+              "Location": {
+                "description": "Адрес страницы анализа.",
+                "schema": {
+                  "type": "string",
+                  "example": "/analysis/8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Не хватает одного из четырёх параметров",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "invalid input: component_url, branch, cve_id and package_name are required" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
         }
       }
     },

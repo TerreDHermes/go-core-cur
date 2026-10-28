@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 
 type Service interface {
 	Create(ctx context.Context, in task.CreateInput) (string, error)
+	Open(ctx context.Context, in task.CreateInput) (string, error)
 	List(ctx context.Context, f tasksvc.ListFilter) ([]task.Task, int, error)
 	Get(ctx context.Context, id string) (task.Task, error)
 	Report(ctx context.Context, id string) (cveID, markdown string, err error)
@@ -25,12 +27,19 @@ type Handler struct {
 	log          *slog.Logger
 	defaultModel string
 	listModels   func(context.Context) ([]string, error)
+	webBase      string
 }
 
 // UseModels serves the env model and the upstream model list. The token stays on the server.
 func (h *Handler) UseModels(defaultModel string, list func(context.Context) ([]string, error)) {
 	h.defaultModel = strings.TrimSpace(defaultModel)
 	h.listModels = list
+}
+
+// UseWebBase is the public origin of the analysis page, without a trailing slash.
+// An empty base redirects to /analysis/{id} on the host that received the request.
+func (h *Handler) UseWebBase(base string) {
+	h.webBase = strings.TrimRight(strings.TrimSpace(base), "/")
 }
 
 func NewHandler(svc Service, log *slog.Logger) *Handler {
@@ -43,6 +52,7 @@ func NewHandler(svc Service, log *slog.Logger) *Handler {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/analysis", h.create)
 	mux.HandleFunc("GET /api/v1/analysis", h.list)
+	mux.HandleFunc("GET /api/v1/analysis/open", h.open)
 	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
 	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
@@ -89,6 +99,29 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": id})
+}
+
+func (h *Handler) open(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	id, err := h.svc.Open(r.Context(), task.CreateInput{
+		ComponentURL: q.Get("component_url"),
+		Branch:       q.Get("branch"),
+		CVEID:        q.Get("cve_id"),
+		PackageName:  q.Get("package_name"),
+	})
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	http.Redirect(w, r, h.analysisPage(id), http.StatusFound)
+}
+
+func (h *Handler) analysisPage(id string) string {
+	path := "/analysis/" + url.PathEscape(id)
+	if h.webBase == "" {
+		return path
+	}
+	return h.webBase + path
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

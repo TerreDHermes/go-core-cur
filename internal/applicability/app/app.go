@@ -44,6 +44,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	mux := http.NewServeMux()
 	h := httpapi.NewHandler(svc, log)
 	h.UseModels(cfg.AIModel, aiClient.ListModels)
+	h.UseWebBase(cfg.WebBaseURL)
 	h.Register(mux)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
