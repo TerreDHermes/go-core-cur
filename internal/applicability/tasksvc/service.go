@@ -76,12 +76,9 @@ func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, erro
 // Open returns the newest analysis with the same four fields.
 // When none exists, it creates one with the default model and enqueues it.
 func (s *Service) Open(ctx context.Context, in task.CreateInput) (string, error) {
-	in.ComponentURL = strings.TrimSpace(in.ComponentURL)
-	in.Branch = strings.TrimSpace(in.Branch)
-	in.CVEID = strings.TrimSpace(in.CVEID)
-	in.PackageName = strings.TrimSpace(in.PackageName)
-	if in.ComponentURL == "" || in.Branch == "" || in.CVEID == "" || in.PackageName == "" {
-		return "", fmt.Errorf("%w: component_url, branch, cve_id and package_name are required", task.ErrInvalidInput)
+	in, err := normalizeKey(in)
+	if err != nil {
+		return "", err
 	}
 	id, err := s.store.LatestID(ctx, in.ComponentURL, in.Branch, in.CVEID, in.PackageName)
 	if err == nil {
@@ -92,6 +89,41 @@ func (s *Service) Open(ctx context.Context, in task.CreateInput) (string, error)
 	}
 	in.Model = ""
 	return s.Create(ctx, in)
+}
+
+// Check reports the newest analysis for the four fields and does not create one.
+// A missing analysis is CheckNotStarted, not an error.
+func (s *Service) Check(ctx context.Context, in task.CreateInput) (string, error) {
+	in, err := normalizeKey(in)
+	if err != nil {
+		return "", err
+	}
+	id, err := s.store.LatestID(ctx, in.ComponentURL, in.Branch, in.CVEID, in.PackageName)
+	if errors.Is(err, task.ErrNotFound) {
+		return task.CheckNotStarted, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	t, err := s.store.Get(ctx, id)
+	if errors.Is(err, task.ErrNotFound) {
+		return task.CheckNotStarted, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return t.CheckResult(), nil
+}
+
+func normalizeKey(in task.CreateInput) (task.CreateInput, error) {
+	in.ComponentURL = strings.TrimSpace(in.ComponentURL)
+	in.Branch = strings.TrimSpace(in.Branch)
+	in.CVEID = strings.TrimSpace(in.CVEID)
+	in.PackageName = strings.TrimSpace(in.PackageName)
+	if in.ComponentURL == "" || in.Branch == "" || in.CVEID == "" || in.PackageName == "" {
+		return task.CreateInput{}, fmt.Errorf("%w: component_url, branch, cve_id and package_name are required", task.ErrInvalidInput)
+	}
+	return in, nil
 }
 
 func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, int, error) {

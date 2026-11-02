@@ -80,10 +80,10 @@ func (s *Store) Create(ctx context.Context, t task.Task) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO analysis_tasks (
 			id, status, component_url, branch, cve_id, package_name, model,
-			error_msg, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+			error_msg, created_at, updated_at, applicability
+		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULLIF(?, ''))`,
 		t.ID, string(t.Status), t.ComponentURL, t.Branch, t.CVEID, t.PackageName, t.Model,
-		t.CreatedAt, t.UpdatedAt,
+		t.CreatedAt, t.UpdatedAt, t.Applicability,
 	)
 	if err != nil {
 		return fmt.Errorf("insert task: %w", err)

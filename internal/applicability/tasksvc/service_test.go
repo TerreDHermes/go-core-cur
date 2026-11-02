@@ -96,3 +96,57 @@ func TestOpenReusesLatestOrCreates(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCheckReportsSixResults(t *testing.T) {
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := New(st, &recordingQueue{})
+	ctx := context.Background()
+	key := task.CreateInput{
+		ComponentURL: " https://example.com/r ",
+		Branch:       "main",
+		CVEID:        "CVE-1",
+		PackageName:  "pkg",
+	}
+
+	got, err := svc.Check(ctx, key)
+	if err != nil || got != task.CheckNotStarted {
+		t.Fatalf("missing: %s %v", got, err)
+	}
+	if _, err := svc.Check(ctx, task.CreateInput{ComponentURL: "https://example.com/r"}); !errors.Is(err, task.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+
+	rows := []task.Task{
+		{ID: "pending", Status: task.StatusPending, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "running", Status: task.StatusRunning, CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z"},
+		{ID: "failed", Status: task.StatusFailed, Applicability: task.Uncertain, CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z"},
+		{ID: "applicable", Status: task.StatusCompleted, Applicability: task.Applicable, CreatedAt: "2026-01-04T00:00:00Z", UpdatedAt: "2026-01-04T00:00:00Z"},
+		{ID: "not", Status: task.StatusCompleted, Applicability: task.NotApplicable, CreatedAt: "2026-01-05T00:00:00Z", UpdatedAt: "2026-01-05T00:00:00Z"},
+		{ID: "uncertain", Status: task.StatusCompleted, Applicability: task.Uncertain, CreatedAt: "2026-01-06T00:00:00Z", UpdatedAt: "2026-01-06T00:00:00Z"},
+	}
+	want := []string{
+		task.CheckInProgress,
+		task.CheckInProgress,
+		task.CheckFailed,
+		task.Applicable,
+		task.NotApplicable,
+		task.Uncertain,
+	}
+	for i, row := range rows {
+		row.ComponentURL = "https://example.com/r"
+		row.Branch = "main"
+		row.CVEID = "CVE-1"
+		row.PackageName = "pkg"
+		if err := st.Create(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+		got, err := svc.Check(ctx, key)
+		if err != nil || got != want[i] {
+			t.Fatalf("%s: got %s err %v", row.ID, got, err)
+		}
+	}
+}

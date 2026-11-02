@@ -22,6 +22,25 @@ func TestClassifyVerdict(t *testing.T) {
 	}
 }
 
+func TestCheckResult(t *testing.T) {
+	cases := []struct {
+		task Task
+		want string
+	}{
+		{Task{Status: StatusPending}, CheckInProgress},
+		{Task{Status: StatusRunning}, CheckInProgress},
+		{Task{Status: StatusFailed, Applicability: Uncertain}, CheckFailed},
+		{Task{Status: StatusCompleted, Applicability: Applicable}, Applicable},
+		{Task{Status: StatusCompleted, Applicability: NotApplicable}, NotApplicable},
+		{Task{Status: StatusCompleted, Applicability: Uncertain}, Uncertain},
+	}
+	for _, tc := range cases {
+		if got := tc.task.CheckResult(); got != tc.want {
+			t.Fatalf("%s/%s: got %s want %s", tc.task.Status, tc.task.Applicability, got, tc.want)
+		}
+	}
+}
+
 func TestRollupApplicability(t *testing.T) {
 	mod := func(kind string) ModuleResult { return ModuleResult{Applicability: kind} }
 	if got := RollupApplicability(nil); got != Uncertain {

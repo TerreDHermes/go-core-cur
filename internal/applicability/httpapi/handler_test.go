@@ -22,6 +22,9 @@ func (f fakeSvc) Create(context.Context, task.CreateInput) (string, error) {
 func (f fakeSvc) Open(context.Context, task.CreateInput) (string, error) {
 	return f.created, nil
 }
+func (f fakeSvc) Check(context.Context, task.CreateInput) (string, error) {
+	return task.CheckNotStarted, nil
+}
 func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, int, error) {
 	return []task.Task{{
 		ID: "1", Status: task.StatusPending, CVEID: "CVE-1",
@@ -83,7 +86,7 @@ func TestSwaggerServesSpecAndUI(t *testing.T) {
 		t.Fatal(rec.Header().Get("Content-Type"))
 	}
 	body := rec.Body.String()
-	for _, part := range []string{`"openapi"`, "/api/v1/analysis/{id}", "createAnalysis", "getAnalysis", "openAnalysis"} {
+	for _, part := range []string{`"openapi"`, "/api/v1/analysis/{id}", "createAnalysis", "getAnalysis", "openAnalysis", "checkAnalysis"} {
 		if !strings.Contains(body, part) {
 			t.Fatalf("spec missing %s", part)
 		}
@@ -253,4 +256,30 @@ type openErrSvc struct{ fakeSvc }
 
 func (openErrSvc) Open(context.Context, task.CreateInput) (string, error) {
 	return "", task.ErrInvalidInput
+}
+func (openErrSvc) Check(context.Context, task.CreateInput) (string, error) {
+	return "", task.ErrInvalidInput
+}
+
+func TestCheckReturnsResult(t *testing.T) {
+	h := NewHandler(fakeSvc{}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/status?component_url=u&branch=b&cve_id=c&package_name=p", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"result":"not_started"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+
+	h = NewHandler(openErrSvc{}, nil)
+	mux = http.NewServeMux()
+	h.Register(mux)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/status?component_url=u", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
 }

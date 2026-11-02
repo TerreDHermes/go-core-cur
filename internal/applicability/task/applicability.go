@@ -9,6 +9,12 @@ const (
 	Applicable    = "applicable"
 	NotApplicable = "not_applicable"
 	Uncertain     = "uncertain"
+
+	// Check results for the dashboard status button. The three verdicts reuse
+	// the applicability values. The other three describe a task that has no verdict yet.
+	CheckNotStarted = "not_started"
+	CheckInProgress = "in_progress"
+	CheckFailed     = "failed"
 )
 
 // ClassifyVerdict reads a verdict paragraph. "неприменима" is checked as its own word,
@@ -75,6 +81,31 @@ func RollupApplicability(modules []ModuleResult) string {
 		return Uncertain
 	}
 	return NotApplicable
+}
+
+// CheckResult is the single answer for the dashboard status button.
+// A missing task is reported by the caller as CheckNotStarted.
+// A failed task stays failed even though its stored applicability is uncertain.
+func (t Task) CheckResult() string {
+	switch t.Status {
+	case StatusPending, StatusRunning:
+		return CheckInProgress
+	case StatusFailed:
+		return CheckFailed
+	case StatusCompleted:
+		kind := t.Applicability
+		if kind == "" {
+			kind = RollupApplicability(t.Modules)
+		}
+		switch kind {
+		case Applicable, NotApplicable, Uncertain:
+			return kind
+		default:
+			return Uncertain
+		}
+	default:
+		return CheckInProgress
+	}
 }
 
 // PublicApplicability is the task-level value for the API.

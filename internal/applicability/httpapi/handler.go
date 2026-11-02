@@ -17,6 +17,7 @@ import (
 type Service interface {
 	Create(ctx context.Context, in task.CreateInput) (string, error)
 	Open(ctx context.Context, in task.CreateInput) (string, error)
+	Check(ctx context.Context, in task.CreateInput) (string, error)
 	List(ctx context.Context, f tasksvc.ListFilter) ([]task.Task, int, error)
 	Get(ctx context.Context, id string) (task.Task, error)
 	Report(ctx context.Context, id string) (cveID, markdown string, err error)
@@ -53,6 +54,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/analysis", h.create)
 	mux.HandleFunc("GET /api/v1/analysis", h.list)
 	mux.HandleFunc("GET /api/v1/analysis/open", h.open)
+	mux.HandleFunc("GET /api/v1/analysis/status", h.check)
 	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
 	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
@@ -114,6 +116,21 @@ func (h *Handler) open(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, h.analysisPage(id), http.StatusFound)
+}
+
+func (h *Handler) check(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	result, err := h.svc.Check(r.Context(), task.CreateInput{
+		ComponentURL: q.Get("component_url"),
+		Branch:       q.Get("branch"),
+		CVEID:        q.Get("cve_id"),
+		PackageName:  q.Get("package_name"),
+	})
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": result})
 }
 
 func (h *Handler) analysisPage(id string) string {

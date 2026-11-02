@@ -3,7 +3,7 @@
   "info": {
     "title": "Анализ применимости CVE",
     "version": "1.0.0",
-    "description": "Сервис ставит задачу на анализ Git-репозитория и потом отдаёт статус и вывод.\n\nПорядок такой: `POST /api/v1/analysis` возвращает `id`. Дальше `GET /api/v1/analysis/{id}` — пока задача в очереди или в работе, `applicability` равен `null`. Когда статус `COMPLETED`, в ответе есть признак применимости и модули с вердиктом. `FAILED` отдаёт `error_msg` и `applicability` = `uncertain`.\n\nКнопка с дашборда открывает `GET /api/v1/analysis/open`: сервер находит последний анализ по четырём параметрам или создаёт новый и перенаправляет браузер на страницу анализа.\n\n`applicability`: `applicable` — уязвимость применима хотя бы в одном модуле, `not_applicable` — неприменима во всех, `uncertain` — применимых нет, но вывод не уверенный."
+    "description": "Сервис ставит задачу на анализ Git-репозитория и потом отдаёт статус и вывод.\n\nПорядок такой: `POST /api/v1/analysis` возвращает `id`. Дальше `GET /api/v1/analysis/{id}` — пока задача в очереди или в работе, `applicability` равен `null`. Когда статус `COMPLETED`, в ответе есть признак применимости и модули с вердиктом. `FAILED` отдаёт `error_msg` и `applicability` = `uncertain`.\n\nКнопка с дашборда открывает `GET /api/v1/analysis/open`: сервер находит последний анализ по четырём параметрам или создаёт новый и перенаправляет браузер на страницу анализа. `GET /api/v1/analysis/status` с теми же параметрами только отвечает, чем закончился самый новый анализ, и ничего не создаёт.\n\n`applicability`: `applicable` — уязвимость применима хотя бы в одном модуле, `not_applicable` — неприменима во всех, `uncertain` — применимых нет, но вывод не уверенный."
   },
   "servers": [
     {
@@ -117,6 +117,64 @@
                   "type": "string",
                   "example": "/analysis/8f14e45f-ceea-4e4a-a3c2-3f6e1b0d9a11"
                 }
+              }
+            }
+          },
+          "400": {
+            "description": "Не хватает одного из четырёх параметров",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "invalid input: component_url, branch, cve_id and package_name are required" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    },
+    "/api/v1/analysis/status": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "checkAnalysis",
+        "summary": "Проверить статус по четырём параметрам",
+        "description": "Кнопка «Проверить статус» на дашборде. Те же четыре параметра, что у открытия анализа. Сервер ищет самый новый анализ и ничего не создаёт.\n\nВ ответе одно поле `result`:\n\n- `applicable` — анализ закончен, уязвимость применима\n- `not_applicable` — анализ закончен, уязвимость неприменима\n- `uncertain` — анализ закончен, вывод неуверенный\n- `not_started` — такой четвёрки в базе нет\n- `in_progress` — задача в очереди или уже выполняется\n- `failed` — проверка запускалась и закончилась ошибкой\n\nУпавший анализ не отдаётся как `uncertain`. Сравнение строк точное, пробелы по краям отбрасываются. Алиас и CVE ID — разные значения.",
+        "parameters": [
+          {
+            "name": "component_url",
+            "in": "query",
+            "required": true,
+            "description": "Git-адрес репозитория.",
+            "schema": { "type": "string", "example": "https://github.com/golang/example" }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string", "example": "master" }
+          },
+          {
+            "name": "cve_id",
+            "in": "query",
+            "required": true,
+            "description": "CVE ID или алиас. Ищется ровно та строка, с которой анализ был создан.",
+            "schema": { "type": "string", "example": "CVE-2024-0001" }
+          },
+          {
+            "name": "package_name",
+            "in": "query",
+            "required": true,
+            "description": "Имя уязвимого пакета.",
+            "schema": { "type": "string", "example": "example" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Один из шести результатов. Отсутствие анализа — это `not_started`, не ошибка.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CheckResult" },
+                "example": { "result": "in_progress" }
               }
             }
           },
@@ -388,6 +446,17 @@
             "type": "string",
             "description": "Модель для этого анализа. Пустое значение — модель из AI_MODEL.",
             "example": "env-model"
+          }
+        }
+      },
+      "CheckResult": {
+        "type": "object",
+        "required": ["result"],
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": ["applicable", "not_applicable", "uncertain", "not_started", "in_progress", "failed"],
+            "description": "applicable — применима, not_applicable — неприменима, uncertain — неопределенно, not_started — анализ еще не запускался, in_progress — в очереди или выполняется, failed — упал."
           }
         }
       },
