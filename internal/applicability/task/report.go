@@ -33,6 +33,7 @@ type Report struct {
 	Grep            *GrepReport      `json:"grep,omitempty"`
 	Reach           *ReachReport     `json:"reach,omitempty"`
 	PatchApplied    *PatchApplied    `json:"patch_applied,omitempty"`
+	PatchCheck      *PatchCheck      `json:"patch_check,omitempty"`
 	Narrative       string           `json:"narrative,omitempty"`
 	Applicability   string           `json:"applicability,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
@@ -51,6 +52,42 @@ type DevNotes struct {
 type PatchApplied struct {
 	Applied bool   `json:"applied"`
 	Detail  string `json:"detail,omitempty"`
+}
+
+const (
+	PatchCheckNotRun       = "not_run"
+	PatchCheckFull         = "full"
+	PatchCheckPartial      = "partial"
+	PatchCheckInconclusive = "inconclusive"
+)
+
+// PatchCheck is the dossier of the "is the patch already applied" step.
+// It is filled even when the step does not run, so the journal can say why.
+type PatchCheck struct {
+	Ran     bool     `json:"ran"`
+	Outcome string   `json:"outcome"`
+	Detail  string   `json:"detail"`
+	Files   []string `json:"files,omitempty"`
+}
+
+// Section is the journal item for this check. It states whether the step ran,
+// how the diff compared, and what that did to the verdict.
+func (c PatchCheck) Section() string {
+	var b strings.Builder
+	b.WriteString("Проверка применения патча\n\n")
+	b.WriteString(c.Detail)
+	if !strings.HasSuffix(c.Detail, "\n") {
+		b.WriteByte('\n')
+	}
+	if len(c.Files) > 0 {
+		b.WriteString("\nПо файлам:\n")
+		for _, line := range c.Files {
+			b.WriteString("- ")
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }
 
 // ReachReport is the deadcode result for functions touched by a patch that is present in the tree.
@@ -291,8 +328,12 @@ func (r Report) Markdown() string {
 // PublicText is the analysis journal the API and the download return.
 // Older rows have no narrative, so the structured markdown is used instead.
 func (r Report) PublicText() string {
+	body := r.Markdown()
 	if strings.TrimSpace(r.Narrative) != "" {
-		return strings.TrimSpace(r.Narrative) + "\n"
+		body = strings.TrimSpace(r.Narrative) + "\n"
 	}
-	return r.Markdown()
+	if r.PatchCheck == nil {
+		return body
+	}
+	return strings.TrimRight(body, "\n") + "\n\n" + r.PatchCheck.Section()
 }

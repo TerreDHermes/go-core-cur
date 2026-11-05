@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,13 +9,16 @@ import (
 	"cve-patch-viewer/internal/applicability/task"
 )
 
-// noteAppliedPatch records a fully applied diff only after reachability is true.
-// Anything short of every file and every hunk leaves the report unchanged.
+// noteAppliedPatch fills the patch-check dossier and, only for a full match,
+// marks the vulnerability not applicable.
 func noteAppliedPatch(repoPath string, files []task.PatchFile, report *task.Report) string {
-	if report == nil || report.Reach == nil || report.Reach.Reachable == nil || !*report.Reach.Reachable {
+	if report == nil {
 		return ""
 	}
-	if !patchFullyApplied(repoPath, files, report.PatchFiles) {
+	check := buildPatchCheck(repoPath, files, report)
+	report.PatchCheck = check
+	if check == nil || check.Outcome != task.PatchCheckFull {
+		report.PatchApplied = nil
 		return ""
 	}
 	report.PatchApplied = &task.PatchApplied{
@@ -24,37 +28,126 @@ func noteAppliedPatch(repoPath string, files []task.PatchFile, report *task.Repo
 	return " Патч применён целиком: уязвимого кода в этой версии уже нет."
 }
 
+func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Report) *task.PatchCheck {
+	if len(files) == 0 {
+		return &task.PatchCheck{
+			Ran:     false,
+			Outcome: task.PatchCheckNotRun,
+			Detail:  "Проверка не проводилась: в патче нет файлов, сверять diff с кодом не с чем. На вывод это не повлияло.",
+		}
+	}
+	if len(report.PatchFiles) == 0 {
+		return &task.PatchCheck{
+			Ran:     false,
+			Outcome: task.PatchCheckNotRun,
+			Detail:  "Проверка не проводилась: пути файлов патча с этим деревом не сопоставлялись. Вывод «патч уже применён» из этого шага не следует.",
+		}
+	}
+	if !patchFileFound(*report) {
+		return &task.PatchCheck{
+			Ran:     false,
+			Outcome: task.PatchCheckNotRun,
+			Detail:  "Проверка не проводилась: файлы патча в этом дереве не найдены. На вывод «патч уже применён» это не повлияло.",
+		}
+	}
+	if report.Reach == nil || report.Reach.Reachable == nil {
+		detail := "Проверка не проводилась: досягаемость уязвимой функции не установлена. Пока это так, патч с кодом не сверяется, и вывод не становится «неприменима» из-за уже применённого патча."
+		if report.Reach != nil && strings.TrimSpace(report.Reach.Detail) != "" {
+			detail = "Проверка не проводилась: досягаемость не установлена (" + strings.TrimSpace(report.Reach.Detail) + "). Патч с кодом не сверялся, вывод из-за этого не становится «неприменима»."
+		}
+		return &task.PatchCheck{Ran: false, Outcome: task.PatchCheckNotRun, Detail: detail}
+	}
+	if !*report.Reach.Reachable {
+		return &task.PatchCheck{
+			Ran:     false,
+			Outcome: task.PatchCheckNotRun,
+			Detail:  "Проверка не проводилась: уязвимая функция недостижима. Неприменимость здесь из-за недостижимости, а не из-за того, что патч уже лежит в коде.",
+		}
+	}
+
+	var lines []string
+	allFull := true
+	anyPartial := false
+	for _, file := range files {
+		status, line := assessPatchFile(repoPath, file, report.PatchFiles)
+		lines = append(lines, line)
+		switch status {
+		case "full":
+		case "partial", "missing":
+			allFull = false
+			anyPartial = true
+		default:
+			allFull = false
+		}
+	}
+	switch {
+	case allFull:
+		return &task.PatchCheck{
+			Ran:     true,
+			Outcome: task.PatchCheckFull,
+			Detail:  "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде. Вывод — неприменима.",
+			Files:   lines,
+		}
+	case anyPartial:
+		return &task.PatchCheck{
+			Ran:     true,
+			Outcome: task.PatchCheckPartial,
+			Detail:  "Проверка проводилась. Патч применён не целиком. Вывод остаётся «применима»: для неприменимости нужно совпадение на 100 процентов.",
+			Files:   lines,
+		}
+	default:
+		return &task.PatchCheck{
+			Ran:     true,
+			Outcome: task.PatchCheckInconclusive,
+			Detail:  "Проверка проводилась, но diff не удалось сверить полностью. Доказать, что патч уже применён, нельзя. Вывод остаётся «применима».",
+			Files:   lines,
+		}
+	}
+}
+
+func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchFileMatch) (string, string) {
+	match, ok := matchByName(matches, file.Filename)
+	if diffDeletesFile(file.Patch) {
+		if !ok || !match.Found {
+			return "full", "файл " + file.Filename + " патч удаляет, и в дереве его нет"
+		}
+		return "partial", "файл " + file.Filename + " патч удаляет, но он всё ещё в дереве"
+	}
+	if !ok || !match.Found {
+		return "missing", "файл " + file.Filename + " в дереве не найден"
+	}
+	if strings.TrimSpace(file.Patch) == "" {
+		return "unparsed", "файл " + file.Filename + ": diff пустой, сверить нельзя"
+	}
+	body, err := os.ReadFile(absMatch(repoPath, match.Path))
+	if err != nil {
+		return "unparsed", "файл " + file.Filename + " не прочитан"
+	}
+	hunks, parsed := parseHunks(file.Patch)
+	if !parsed || len(hunks) == 0 {
+		return "unparsed", "файл " + file.Filename + ": diff не разобран по фрагментам"
+	}
+	lines := splitLines(string(body))
+	matched := 0
+	for _, hunk := range hunks {
+		if hunkApplied(lines, hunk.old, hunk.new) {
+			matched++
+		}
+	}
+	if matched == len(hunks) {
+		return "full", "файл " + file.Filename + ": все фрагменты патча уже в коде"
+	}
+	return "partial", fmt.Sprintf("файл %s: совпали %d из %d фрагментов", file.Filename, matched, len(hunks))
+}
+
 func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) bool {
 	if len(files) == 0 {
 		return false
 	}
 	for _, file := range files {
-		match, ok := matchByName(matches, file.Filename)
-		if !ok {
+		status, _ := assessPatchFile(repoPath, file, matches)
+		if status != "full" {
 			return false
-		}
-		if diffDeletesFile(file.Patch) {
-			if match.Found {
-				return false
-			}
-			continue
-		}
-		if !match.Found || strings.TrimSpace(file.Patch) == "" {
-			return false
-		}
-		body, err := os.ReadFile(absMatch(repoPath, match.Path))
-		if err != nil {
-			return false
-		}
-		hunks, ok := parseHunks(file.Patch)
-		if !ok || len(hunks) == 0 {
-			return false
-		}
-		lines := splitLines(string(body))
-		for _, hunk := range hunks {
-			if !hunkApplied(lines, hunk.old, hunk.new) {
-				return false
-			}
 		}
 	}
 	return true

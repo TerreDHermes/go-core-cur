@@ -127,6 +127,7 @@ func scanNotGo(ctx context.Context, in Input, patches PatchSource, explain Expla
 		result.Verdict = verdictNotGo(0, false)
 	}
 	applyGrep(&result, ev)
+	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 
@@ -141,19 +142,23 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	}
 	if !mod.HasVendor {
 		report.Stage = task.StageNoVendor
-		return task.ModuleResult{
+		result := task.ModuleResult{
 			GoModPath: mod.GoModPath,
 			Verdict:   verdictNoVendor(in, mod.GoModPath, len(patch.Files) == 0),
 			ReportMD:  report,
 		}
+		result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+		return result
 	}
 	if len(patch.Files) == 0 {
 		report.Stage = task.StageNoPatch
-		return task.ModuleResult{
+		result := task.ModuleResult{
 			GoModPath: mod.GoModPath,
 			Verdict:   verdictNoPatch(in, mod.GoModPath),
 			ReportMD:  report,
 		}
+		result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+		return result
 	}
 	matches := locatePatchFiles(in.RepoPath, mod.VendorAbs, in.PackageName, patch.Files)
 	report.Stage = task.StagePatchFiles
@@ -161,11 +166,13 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	report.FoundPatchFiles = foundPaths(matches)
 	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles)
 	verdict += attachReach(ctx, in.RepoPath, patch, &report)
-	return task.ModuleResult{
+	result := task.ModuleResult{
 		GoModPath: mod.GoModPath,
 		Verdict:   verdict,
 		ReportMD:  report,
 	}
+	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	return result
 }
 
 func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
@@ -186,11 +193,13 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	}
 	if len(patch.Files) == 0 {
 		report.Stage = task.StageNoPatch
-		return withGrep(ctx, in.RepoPath, in, patch, explain, notes, []task.ModuleResult{{
+		result := task.ModuleResult{
 			GoModPath: ".",
 			Verdict:   verdictRootNoPatch(),
 			ReportMD:  report,
-		}})
+		}
+		result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+		return withGrep(ctx, in.RepoPath, in, patch, explain, notes, []task.ModuleResult{result})
 	}
 	if hit, ok := rootHit(ctx, in.RepoPath, patch, true); ok {
 		return finish(ctx, in, []task.ModuleResult{hit}, explain, notes)
@@ -199,11 +208,13 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	report.Stage = task.StagePatchFiles
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
-	return finish(ctx, in, []task.ModuleResult{{
+	result := task.ModuleResult{
 		GoModPath: ".",
 		Verdict:   verdictRootPatchFiles(report.FoundPatchFiles),
 		ReportMD:  report,
-	}}, explain, notes)
+	}
+	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 
 func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit bool) (task.ModuleResult, bool) {
@@ -228,7 +239,9 @@ func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit
 		verdict = verdictExtraRoot(found)
 	}
 	verdict += attachReach(ctx, repoPath, patch, &report)
-	return task.ModuleResult{GoModPath: ".", Verdict: verdict, ReportMD: report}, true
+	result := task.ModuleResult{GoModPath: ".", Verdict: verdict, ReportMD: report}
+	result.Verdict += noteAppliedPatch(repoPath, patch.Files, &result.ReportMD)
+	return result, true
 }
 
 func attachReach(ctx context.Context, repoPath string, patch task.CVEPatch, report *task.Report) string {
@@ -236,7 +249,7 @@ func attachReach(ctx context.Context, repoPath string, patch task.CVEPatch, repo
 		return ""
 	}
 	report.Reach = analyzeReach(ctx, repoPath, patch.Files, report.PatchFiles)
-	return reachFacts(report.Reach) + noteAppliedPatch(repoPath, patch.Files, report)
+	return reachFacts(report.Reach)
 }
 
 func searchAbsent(ctx context.Context, in Input, patch task.CVEPatch, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
@@ -263,6 +276,7 @@ func searchAbsent(ctx context.Context, in Input, patch task.CVEPatch, explain Ex
 		}
 	}
 	applyGrep(&result, ev)
+	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 

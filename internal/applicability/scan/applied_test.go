@@ -2,6 +2,7 @@ package scan
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"cve-patch-viewer/internal/applicability/task"
@@ -53,6 +54,13 @@ func TestPatchAppliedOnlyWhenReachable(t *testing.T) {
 	if note := noteAppliedPatch(root, files, &report); note != "" || report.PatchApplied != nil {
 		t.Fatal("unreachable patch must stay applicable")
 	}
+	if report.PatchCheck == nil || report.PatchCheck.Ran || !strings.Contains(report.PatchCheck.Section(), "не проводилась") {
+		t.Fatalf("%+v", report.PatchCheck)
+	}
+	report.Narrative = "журнал анализа"
+	if !strings.Contains(report.PublicText(), "Проверка применения патча") || !strings.Contains(report.PublicText(), "журнал анализа") {
+		t.Fatal(report.PublicText())
+	}
 	yes := true
 	report.Reach = &task.ReachReport{Reachable: &yes}
 	if note := noteAppliedPatch(root, files, &report); note == "" || report.PatchApplied == nil || !report.PatchApplied.Applied {
@@ -60,6 +68,19 @@ func TestPatchAppliedOnlyWhenReachable(t *testing.T) {
 	}
 	if decideApplicability(report, "") != task.NotApplicable {
 		t.Fatal(decideApplicability(report, ""))
+	}
+	if report.PatchCheck == nil || report.PatchCheck.Outcome != task.PatchCheckFull || !strings.Contains(report.PatchCheck.Section(), "неприменима") {
+		t.Fatal(report.PatchCheck.Section())
+	}
+
+	report.Reach = &task.ReachReport{Reachable: &yes}
+	report.PatchApplied = nil
+	mustWrite(t, filepath.Join(root, rel), "func HostID() string {\n\treturn \"vuln\"\n}\n")
+	if note := noteAppliedPatch(root, files, &report); note != "" || report.PatchApplied != nil {
+		t.Fatal("partial patch must stay applicable")
+	}
+	if report.PatchCheck.Outcome != task.PatchCheckPartial || !strings.Contains(report.PatchCheck.Section(), "не целиком") {
+		t.Fatal(report.PatchCheck.Section())
 	}
 }
 
