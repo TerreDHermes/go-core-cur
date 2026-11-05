@@ -35,6 +35,8 @@ type Report struct {
 	PatchApplied    *PatchApplied    `json:"patch_applied,omitempty"`
 	PatchCheck      *PatchCheck      `json:"patch_check,omitempty"`
 	Narrative       string           `json:"narrative,omitempty"`
+	ModelNote       string           `json:"model_note,omitempty"`
+	ActiveModel     string           `json:"active_model,omitempty"`
 	Applicability   string           `json:"applicability,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
 }
@@ -331,6 +333,9 @@ func (r Report) PublicText() string {
 	body := r.Markdown()
 	if strings.TrimSpace(r.Narrative) != "" {
 		body = strings.TrimSpace(r.Narrative) + "\n"
+	}
+	if note := strings.TrimSpace(r.ModelNote); note != "" {
+		body = strings.TrimRight(body, "\n") + "\n\n" + note + "\n"
 	}
 	if r.PatchCheck == nil {
 		return body

@@ -189,6 +189,16 @@ func (s *Store) SaveAIMetrics(ctx context.Context, id string, m task.AIMetrics) 
 	return rowsOne(res, "save ai metrics")
 }
 
+// SetModel records the model that finished the analysis after a queue fallback.
+func (s *Store) SetModel(ctx context.Context, id, model string) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE analysis_tasks SET model = ? WHERE id = ?`, model, id)
+	if err != nil {
+		return fmt.Errorf("set model: %w", err)
+	}
+	return rowsOne(res, "set model")
+}
+
 // RequeueRunning returns tasks left RUNNING by a dead process to the queue.
 // Claim only takes PENDING, so the status has to change before they can run again.
 func (s *Store) RequeueRunning(ctx context.Context, updatedAt string) ([]string, error) {

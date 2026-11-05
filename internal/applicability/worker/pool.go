@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,7 +181,25 @@ func (p *Pool) handle(id string) {
 		PackageName:  t.PackageName,
 		Model:        t.Model,
 	})
+	if err == nil {
+		if model := switchedModel(modules); model != "" && model != t.Model {
+			if uerr := p.store.SetModel(context.Background(), id, model); uerr != nil {
+				log.Error("save model", "err", uerr)
+			} else {
+				log.Info("model switched", "from", t.Model, "to", model)
+			}
+		}
+	}
 	p.finish(id, modules, stats, err)
+}
+
+func switchedModel(modules []task.ModuleResult) string {
+	for _, m := range modules {
+		if model := strings.TrimSpace(m.ReportMD.ActiveModel); model != "" {
+			return model
+		}
+	}
+	return ""
 }
 
 func (p *Pool) finish(id string, modules []task.ModuleResult, stats *ai.CallStats, err error) {

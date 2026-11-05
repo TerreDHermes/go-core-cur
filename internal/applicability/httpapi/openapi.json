@@ -493,7 +493,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Модель для этого анализа. Пустое значение — модель из AI_MODEL.",
+            "description": "Модель для этого анализа. Пустое значение — модель из AI_MODEL. Если у неё переполнена очередь AI HUB, анализ продолжается на Qwen/Qwen3.6-35B-A3B, затем на GigaChat-2-Pro. В готовой задаче лежит модель, которая дописала вывод.",
             "example": "env-model"
           }
         }
@@ -543,7 +543,7 @@
           "package_name": { "type": "string" },
           "model": {
             "type": "string",
-            "description": "Модель, которой считался этот анализ."
+            "description": "Модель, которой дописан вывод. Если очередь исходной модели была переполнена, здесь резервная."
           },
           "created_at": { "type": "string", "format": "date-time" },
           "duration_ms": {

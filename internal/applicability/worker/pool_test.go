@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +84,48 @@ func (countingScan) Scan(ctx context.Context, _ scan.Input) ([]task.ModuleResult
 		GoModPath: "./go.mod",
 		Verdict:   "pkg listed in ./go.mod",
 	}}, nil
+}
+
+type switchedScan struct{}
+
+func (switchedScan) Scan(context.Context, scan.Input) ([]task.ModuleResult, error) {
+	return []task.ModuleResult{{
+		GoModPath: "./go.mod",
+		Verdict:   "ok",
+		ReportMD: task.Report{
+			ActiveModel: "Qwen/Qwen3.6-35B-A3B",
+			ModelNote:   "Модель сменена с primary на Qwen/Qwen3.6-35B-A3B: очередь AI HUB переполнена.",
+		},
+	}}, nil
+}
+
+func TestHandleStoresSwitchedModel(t *testing.T) {
+	st, err := sqlite.Open(t.TempDir() + "/t.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	now := "2026-01-01T00:00:00Z"
+	if err := st.Create(context.Background(), task.Task{
+		ID: "t1", Status: task.StatusPending,
+		ComponentURL: "https://example.com/r", Branch: "main",
+		CVEID: "CVE-1", PackageName: "pkg", Model: "primary",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := New(st, pathClone{dir: t.TempDir()}, switchedScan{}, 1, 4, time.Second, nil)
+	p.handle("t1")
+	got, err := st.Get(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusCompleted || got.Model != "Qwen/Qwen3.6-35B-A3B" {
+		t.Fatalf("%s %s", got.Status, got.Model)
+	}
+	if !strings.Contains(got.Modules[0].ReportMD.PublicText(), "очередь AI HUB переполнена") {
+		t.Fatal(got.Modules[0].ReportMD.PublicText())
+	}
 }
 
 func TestHandleStoresAICallTimes(t *testing.T) {
