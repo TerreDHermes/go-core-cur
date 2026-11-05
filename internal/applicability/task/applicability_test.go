@@ -1,6 +1,9 @@
 package task
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestClassifyVerdict(t *testing.T) {
 	cases := []struct {
@@ -58,15 +61,24 @@ func TestRollupApplicability(t *testing.T) {
 }
 
 func TestDurationMS(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
 	pending := Task{Status: StatusPending, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"}
-	if ms := pending.DurationMS(); ms == nil || *ms != 0 {
+	if ms := pending.DurationMS(now); ms != nil {
 		t.Fatalf("%v", ms)
 	}
-	done := Task{Status: StatusCompleted, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:04Z"}
-	if ms := done.DurationMS(); ms == nil || *ms != 4000 {
+	running := Task{Status: StatusRunning, CreatedAt: "2026-01-01T00:00:00Z", StartedAt: "2026-01-01T00:00:04Z", UpdatedAt: "2026-01-01T00:00:04Z"}
+	if ms := running.DurationMS(now); ms == nil || *ms != 6000 {
 		t.Fatalf("%v", ms)
 	}
-	if (Task{Status: StatusRunning}).DurationMS() != nil {
+	done := Task{Status: StatusCompleted, CreatedAt: "2026-01-01T00:00:00Z", StartedAt: "2026-01-01T00:00:05Z", UpdatedAt: "2026-01-01T00:00:09Z"}
+	if ms := done.DurationMS(now); ms == nil || *ms != 4000 {
+		t.Fatalf("%v", ms)
+	}
+	old := Task{Status: StatusCompleted, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:04Z"}
+	if ms := old.DurationMS(now); ms == nil || *ms != 4000 {
+		t.Fatalf("old row %v", ms)
+	}
+	if (Task{Status: StatusRunning}).DurationMS(now) != nil {
 		t.Fatal("missing stamps")
 	}
 	if done.PublicApplicability() == nil || *done.PublicApplicability() != Uncertain {

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     error_msg TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    started_at TEXT,
     applicability TEXT,
     ai_calls INTEGER NOT NULL DEFAULT 0,
     ai_min_ms INTEGER,

@@ -550,7 +550,7 @@
             "type": "integer",
             "format": "int64",
             "nullable": true,
-            "description": "updated_at минус created_at, в миллисекундах."
+            "description": "Сколько миллисекунд шёл сам анализ, без ожидания в очереди. null, пока задача в очереди. Для задачи в работе — текущее время минус старт."
           },
           "applicability": { "$ref": "#/components/schemas/Applicability" }
         }

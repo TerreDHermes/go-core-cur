@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"cve-patch-viewer/internal/applicability/task"
 )
@@ -46,9 +47,12 @@ func TestClaimIsAtomic(t *testing.T) {
 	if got.Applicability != task.Uncertain {
 		t.Fatal(got.Applicability)
 	}
-	ms := got.DurationMS()
-	if ms == nil || *ms != 3000 {
-		t.Fatalf("created %s updated %s duration %v", got.CreatedAt, got.UpdatedAt, ms)
+	if got.StartedAt != "2026-01-01T00:00:01Z" {
+		t.Fatal(got.StartedAt)
+	}
+	ms := got.DurationMS(time.Time{})
+	if ms == nil || *ms != 2000 {
+		t.Fatalf("started %s updated %s duration %v", got.StartedAt, got.UpdatedAt, ms)
 	}
 }
 
@@ -108,9 +112,12 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	if failed.Applicability != task.Uncertain {
 		t.Fatal(failed.Applicability)
 	}
-	ms := failed.DurationMS()
-	if ms == nil || *ms != 2000 {
-		t.Fatalf("created %s updated %s duration %v", failed.CreatedAt, failed.UpdatedAt, ms)
+	if failed.StartedAt != "2026-01-02T00:00:01Z" {
+		t.Fatal(failed.StartedAt)
+	}
+	ms := failed.DurationMS(time.Time{})
+	if ms == nil || *ms != 1000 {
+		t.Fatalf("started %s updated %s duration %v", failed.StartedAt, failed.UpdatedAt, ms)
 	}
 	pending, err := st.ListPendingIDs(ctx)
 	if err != nil {
@@ -133,13 +140,16 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 	st := openTest(t)
 	ctx := context.Background()
 	for _, item := range []task.Task{
-		{ID: "run", Status: task.StatusRunning, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "run", Status: task.StatusPending, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
 		{ID: "wait", Status: task.StatusPending, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z"},
 		{ID: "done", Status: task.StatusFailed, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z"},
 	} {
 		if err := st.Create(ctx, item); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if ok, err := st.Claim(ctx, "run", "2026-01-01T00:00:02Z"); err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
 	ids, err := st.RequeueRunning(ctx, "2026-01-04T00:00:00Z")
 	if err != nil {
@@ -149,7 +159,7 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 		t.Fatalf("%v", ids)
 	}
 	got, err := st.Get(ctx, "run")
-	if err != nil || got.Status != task.StatusPending {
+	if err != nil || got.Status != task.StatusPending || got.StartedAt != "" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	pending, err := st.ListPendingIDs(ctx)

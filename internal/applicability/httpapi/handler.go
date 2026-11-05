@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"cve-patch-viewer/internal/applicability/task"
 	"cve-patch-viewer/internal/applicability/tasksvc"
@@ -183,7 +184,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			PackageName:   t.PackageName,
 			Model:         t.Model,
 			CreatedAt:     t.CreatedAt,
-			DurationMS:    t.DurationMS(),
+			DurationMS:    t.DurationMS(time.Now()),
 			Applicability: t.PublicApplicability(),
 		})
 	}
@@ -243,7 +244,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		ErrorHint:     blame.Hint,
 		CreatedAt:     t.CreatedAt,
 		UpdatedAt:     t.UpdatedAt,
-		DurationMS:    t.DurationMS(),
+		DurationMS:    t.DurationMS(time.Now()),
 		Applicability: t.PublicApplicability(),
 		AICalls:       t.AICalls,
 		AIMinMS:       t.AIMinMS,

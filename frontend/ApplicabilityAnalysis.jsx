@@ -627,7 +627,7 @@ export default function ApplicabilityAnalysis() {
     const text = formatDuration(ms);
     if (!text) return null;
     return (
-      <span title="С момента запроса до последнего изменения статуса" style={pillStyle({ bg: '#FFFFFF', text: theme.textMuted, border: theme.border })}>
+      <span title="Сколько шёл анализ, без ожидания в очереди" style={pillStyle({ bg: '#FFFFFF', text: theme.textMuted, border: theme.border })}>
         <ClockIcon />
         {text}
       </span>

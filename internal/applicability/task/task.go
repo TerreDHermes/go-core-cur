@@ -35,6 +35,7 @@ type Task struct {
 	ErrorMsg      string
 	CreatedAt     string
 	UpdatedAt     string
+	StartedAt     string
 	Applicability string
 	Modules       []ModuleResult
 	AICalls       int

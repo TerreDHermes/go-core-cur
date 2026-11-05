@@ -124,19 +124,38 @@ func (t Task) PublicApplicability() *string {
 	return &kind
 }
 
-// DurationMS is updated_at minus created_at, in milliseconds.
-// That is how long the task has been open from the client's request until the last status change.
-func (t Task) DurationMS() *int64 {
-	created, okCreated := parseStamp(t.CreatedAt)
-	updated, okUpdated := parseStamp(t.UpdatedAt)
-	if !okCreated || !okUpdated {
+// DurationMS is how long the analysis itself has been running, in milliseconds.
+// The clock starts when a worker claims the task. A queued task has no duration.
+// A running task is measured up to now. A finished task ends at updated_at.
+// Rows saved before started_at existed fall back to updated_at minus created_at.
+func (t Task) DurationMS(now time.Time) *int64 {
+	start, okStart := parseStamp(t.StartedAt)
+	switch t.Status {
+	case StatusPending:
 		return nil
+	case StatusRunning:
+		if !okStart {
+			return nil
+		}
+		return diffMS(start, now)
+	default:
+		end, okEnd := parseStamp(t.UpdatedAt)
+		if !okStart {
+			start, okStart = parseStamp(t.CreatedAt)
+		}
+		if !okStart || !okEnd {
+			return nil
+		}
+		return diffMS(start, end)
 	}
-	if updated.Before(created) {
+}
+
+func diffMS(start, end time.Time) *int64 {
+	if end.Before(start) {
 		zero := int64(0)
 		return &zero
 	}
-	ms := updated.Sub(created).Milliseconds()
+	ms := end.Sub(start).Milliseconds()
 	return &ms
 }
 
