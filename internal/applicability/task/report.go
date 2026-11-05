@@ -32,6 +32,7 @@ type Report struct {
 	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
 	Grep            *GrepReport      `json:"grep,omitempty"`
 	Reach           *ReachReport     `json:"reach,omitempty"`
+	PatchApplied    *PatchApplied    `json:"patch_applied,omitempty"`
 	Narrative       string           `json:"narrative,omitempty"`
 	Applicability   string           `json:"applicability,omitempty"`
 	Patch           CVEPatch         `json:"patch"`
@@ -43,6 +44,13 @@ type DevNotes struct {
 	Path      string `json:"path"`
 	Text      string `json:"text"`
 	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// PatchApplied is set only when every file and every hunk of the diff is already in the tree.
+// A partial match leaves the field empty, and the vulnerability stays applicable.
+type PatchApplied struct {
+	Applied bool   `json:"applied"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // ReachReport is the deadcode result for functions touched by a patch that is present in the tree.
@@ -222,6 +230,9 @@ func (r Report) Markdown() string {
 		if r.Grep.ExcerptsTruncated {
 			b.WriteString("Grep excerpts truncated: yes\n\n")
 		}
+	}
+	if r.PatchApplied != nil && r.PatchApplied.Applied {
+		b.WriteString("Patch applied: yes\n\n")
 	}
 	if r.Reach != nil {
 		b.WriteString("Reachability:\n\n")

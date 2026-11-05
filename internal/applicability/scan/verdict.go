@@ -19,17 +19,6 @@ func verdictNotGo(fileCount int, targeted bool) string {
 	}
 }
 
-func packageAbsent(in Input, patch task.CVEPatch) task.ModuleResult {
-	return task.ModuleResult{
-		GoModPath: "-",
-		Verdict: fmt.Sprintf(
-			"Потенциальная уязвимость %s %s не применима, так как пакет %s ни в каком go.mod не найден. Если это пакет не гошный, тогда данный вывод не актуален и стоит провести анализ самостоятельно. Если пакет гошный, тогда, возможно, в названии есть опечатка.",
-			in.CVEID, formatAliases(patch.Aliases, in.CVEID), in.PackageName,
-		),
-		ReportMD: task.Report{Stage: task.StagePackageAbsent, Patch: patch},
-	}
-}
-
 func verdictNoVendor(in Input, goModPath string, patchMissing bool) string {
 	verdict := fmt.Sprintf("Пакет %s действительно есть в %s. Но рядом директории vendor нет. В связи с этим, анализ для текущего go.mod завершен - без vendor анализ невозможен.", in.PackageName, goModPath)
 	if patchMissing {
@@ -78,7 +67,14 @@ func verdictRootPatchFiles(found []string) string {
 	return verdict + " В корне найдены файлы патча: " + strings.Join(found, ", ") + "."
 }
 
+func verdictExtraRoot(found []string) string {
+	return "Имя пакета задано не как root, но файлы патча дополнительно проверены от корня репозитория. В корне найдены файлы патча: " + strings.Join(found, ", ") + "."
+}
+
 func decideApplicability(report task.Report, verdict string) string {
+	if report.PatchApplied != nil && report.PatchApplied.Applied {
+		return task.NotApplicable
+	}
 	if report.Reach != nil && report.Reach.Reachable != nil {
 		if *report.Reach.Reachable {
 			return task.Applicable

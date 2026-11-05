@@ -625,7 +625,7 @@ func TestScanFailsWhenAIFails(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
 	_, err := Scan(context.Background(), Input{RepoPath: root, PackageName: "pkg"}, fakePatch{}, failAI{})
-	if err == nil || !strings.Contains(err.Error(), "ai verdict") {
+	if err == nil || !strings.Contains(err.Error(), "ai grep phrases") {
 		t.Fatal(err)
 	}
 }
@@ -753,7 +753,7 @@ func TestVulnerableVersionContinuesAndEmptyGrepIsNotApplicable(t *testing.T) {
 	}
 }
 
-func TestPackageAbsentDoesNotSearchTheTree(t *testing.T) {
+func TestPackageAbsentSearchesTheTree(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
 	mustWrite(t, filepath.Join(root, "lib.py"), "def HostID():\n    return 1\n")
@@ -766,11 +766,65 @@ func TestPackageAbsentDoesNotSearchTheTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[0].ReportMD.Stage != task.StagePackageAbsent || got[0].ReportMD.Grep != nil || got[0].Applicability != task.NotApplicable {
-		t.Fatalf("%s %+v %s", got[0].ReportMD.Stage, got[0].ReportMD.Grep, got[0].Applicability)
+	if len(got) != 1 || got[0].ReportMD.Stage != task.StagePackageAbsent || got[0].ReportMD.Grep == nil || len(got[0].ReportMD.Grep.Hits) == 0 {
+		t.Fatalf("%s %+v", got[0].ReportMD.Stage, got[0].ReportMD.Grep)
 	}
-	if len(ai.prompts) != 2 || strings.Contains(ai.prompts[0], "grep -rwn") {
-		t.Fatal(ai.prompts[0])
+	if got[0].Applicability != task.Uncertain {
+		t.Fatal(got[0].Applicability)
+	}
+	if len(ai.prompts) < 1 || !strings.Contains(ai.prompts[0], "grep -rwn") {
+		t.Fatal(ai.prompts)
+	}
+}
+
+func TestNamedPackageAlsoKeepsRootHit(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire github.com/foo/bar v1.2.3\n")
+	mustWrite(t, filepath.Join(root, "vendor", "github.com", "foo", "bar", "a.go"), "package bar\n")
+	mustWrite(t, filepath.Join(root, "sdk", "resource", "host_id.go"), "package resource\n")
+	got, err := Scan(context.Background(), Input{
+		RepoPath:    root,
+		CVEID:       "CVE-1",
+		PackageName: "github.com/foo/bar",
+	}, fakePatch{files: []task.PatchFile{
+		{Filename: "sdk/resource/host_id.go"},
+		{Filename: "sdk/resource/missing.go"},
+	}}, staticAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len %d", len(got))
+	}
+	if got[0].GoModPath == "." || !got[1].ReportMD.FromRoot || !got[1].ReportMD.PatchFiles[0].Found {
+		t.Fatalf("%+v %+v", got[0].GoModPath, got[1].ReportMD)
+	}
+	if !strings.Contains(got[1].ReportMD.PreVerdict, "дополнительно проверены от корня") {
+		t.Fatal(got[1].ReportMD.PreVerdict)
+	}
+	if got[1].ReportMD.PatchFiles[1].Found {
+		t.Fatal(got[1].ReportMD.PatchFiles[1])
+	}
+}
+
+func TestAbsentPackageUsesRootHitInsteadOfStopping(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+	mustWrite(t, filepath.Join(root, "sdk", "resource", "host_id.go"), "package resource\n")
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://github.com/acme/widgets",
+		CVEID:        "CVE-1",
+		PackageName:  "widgets",
+	}, fakePatch{files: []task.PatchFile{{Filename: "sdk/resource/host_id.go"}}}, staticAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].ReportMD.FromRoot || got[0].ReportMD.Stage == task.StagePackageAbsent {
+		t.Fatalf("%+v", got[0].ReportMD)
+	}
+	if !got[0].ReportMD.PatchFiles[0].Found || !strings.Contains(got[0].ReportMD.PreVerdict, "дополнительно проверены от корня") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
 }
 

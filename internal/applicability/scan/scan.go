@@ -33,11 +33,14 @@ type Explainer interface {
 
 // Scan chooses one branch of the analysis and does not perform the branch itself.
 // dapp/README.md is read first when that file exists.
-// Package "root" looks for patch files from the repository root.
+// Package "root" looks for patch files from the repository root and does not also scan modules.
+// Any other package still checks those root paths when the patch lists files, and keeps a hit as its own result.
 // A repository with no go.mod is not treated as finished: the patch is fetched and the tree is grepped.
+// A named package missing from every go.mod is not a finished "not applicable": the tree is searched too.
 // Any other package stops a module early when it has no vendor and the patch has files.
 // A module with a vendor directory and a patch continues into the patch steps.
 // An empty patch asks the model for five grep phrases, searches the tree, and stores both.
+// A reachable patch is not applicable only when every hunk is already present.
 // The deterministic text stays in Report.PreVerdict. Explain replaces Verdict and fills Narrative.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
 	notes, err := loadDevNotes(in.RepoPath)
@@ -67,7 +70,10 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		return nil, err
 	}
 	if len(matched) == 0 {
-		return finish(ctx, in, []task.ModuleResult{packageAbsent(in, patch)}, explain, notes)
+		if hit, ok := rootHit(ctx, in.RepoPath, patch, false); ok {
+			return finish(ctx, in, []task.ModuleResult{hit}, explain, notes)
+		}
+		return searchAbsent(ctx, in, patch, explain, notes)
 	}
 
 	var found []task.ModuleResult
@@ -76,6 +82,9 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 			return nil, ctx.Err()
 		}
 		found = append(found, analyzeModule(ctx, in, patch, mod))
+	}
+	if hit, ok := rootHit(ctx, in.RepoPath, patch, false); ok {
+		found = append(found, hit)
 	}
 	return withGrep(ctx, in.RepoPath, in, patch, explain, notes, found)
 }
@@ -151,10 +160,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
 	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles)
-	if patchFileFound(report) {
-		report.Reach = analyzeReach(ctx, in.RepoPath, patch.Files, report.PatchFiles)
-		verdict += reachFacts(report.Reach)
-	}
+	verdict += attachReach(ctx, in.RepoPath, patch, &report)
 	return task.ModuleResult{
 		GoModPath: mod.GoModPath,
 		Verdict:   verdict,
@@ -186,20 +192,78 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 			ReportMD:  report,
 		}})
 	}
+	if hit, ok := rootHit(ctx, in.RepoPath, patch, true); ok {
+		return finish(ctx, in, []task.ModuleResult{hit}, explain, notes)
+	}
 	matches := locateRootPatchFiles(in.RepoPath, patch.Files)
 	report.Stage = task.StagePatchFiles
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
-	verdict := verdictRootPatchFiles(report.FoundPatchFiles)
-	if patchFileFound(report) {
-		report.Reach = analyzeReach(ctx, in.RepoPath, patch.Files, report.PatchFiles)
-		verdict += reachFacts(report.Reach)
-	}
 	return finish(ctx, in, []task.ModuleResult{{
 		GoModPath: ".",
-		Verdict:   verdict,
+		Verdict:   verdictRootPatchFiles(report.FoundPatchFiles),
 		ReportMD:  report,
 	}}, explain, notes)
+}
+
+func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit bool) (task.ModuleResult, bool) {
+	if len(patch.Files) == 0 {
+		return task.ModuleResult{}, false
+	}
+	matches := locateRootPatchFiles(repoPath, patch.Files)
+	found := foundPaths(matches)
+	if len(found) == 0 {
+		return task.ModuleResult{}, false
+	}
+	report := task.Report{
+		GoModPath:       ".",
+		FromRoot:        true,
+		Stage:           task.StagePatchFiles,
+		Patch:           patch,
+		PatchFiles:      matches,
+		FoundPatchFiles: found,
+	}
+	verdict := verdictRootPatchFiles(found)
+	if !explicit {
+		verdict = verdictExtraRoot(found)
+	}
+	verdict += attachReach(ctx, repoPath, patch, &report)
+	return task.ModuleResult{GoModPath: ".", Verdict: verdict, ReportMD: report}, true
+}
+
+func attachReach(ctx context.Context, repoPath string, patch task.CVEPatch, report *task.Report) string {
+	if !patchFileFound(*report) {
+		return ""
+	}
+	report.Reach = analyzeReach(ctx, repoPath, patch.Files, report.PatchFiles)
+	return reachFacts(report.Reach) + noteAppliedPatch(repoPath, patch.Files, report)
+}
+
+func searchAbsent(ctx context.Context, in Input, patch task.CVEPatch, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
+	result := task.ModuleResult{
+		GoModPath: "-",
+		Verdict: fmt.Sprintf(
+			"Пакет %s ни в одном go.mod не найден. Это может быть опечатка в имени или код не на Go, поэтому дерево репозитория проверено отдельно.",
+			in.PackageName,
+		),
+		ReportMD: task.Report{Stage: task.StagePackageAbsent, Patch: patch},
+	}
+	var ev *grepEvidence
+	var err error
+	if len(patch.Files) > 0 {
+		ev, err = patchTreeGrep(ctx, in.RepoPath, patch)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if ev == nil {
+		ev, err = descriptionGrep(ctx, in.RepoPath, patch, explain)
+		if err != nil {
+			return nil, err
+		}
+	}
+	applyGrep(&result, ev)
+	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 
 func finish(ctx context.Context, in Input, results []task.ModuleResult, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
