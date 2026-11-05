@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // AIClient calls an OpenAI-compatible chat endpoint.
@@ -35,10 +36,19 @@ func NewAIClient(baseURL, token, model string) *AIClient {
 }
 
 // CallAI posts one user prompt and returns the assistant text.
+// An empty prompt is not a model call. Every other attempt, including a failed one,
+// is timed when the context carries call stats.
 func (c *AIClient) CallAI(ctx context.Context, prompt string) (string, error) {
 	if prompt == "" {
 		return "", nil
 	}
+	start := time.Now()
+	text, err := c.callAI(ctx, prompt)
+	observeCall(ctx, time.Since(start))
+	return text, err
+}
+
+func (c *AIClient) callAI(ctx context.Context, prompt string) (string, error) {
 	if c.BaseURL == "" {
 		return "", fmt.Errorf("ai base url is empty")
 	}

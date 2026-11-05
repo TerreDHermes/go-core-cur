@@ -28,6 +28,7 @@ func TestBlameError(t *testing.T) {
 		{"git checkout release: context deadline exceeded", "Git", "Репозиторий не скачался за отведённое время."},
 		{"бинарник deadcode не найден в PATH", "CVE Patch Analyzer", "В анализе не найден инструмент deadcode."},
 		{"panic: runtime error", "CVE Patch Analyzer", "Ошибка на стороне CVE Patch Analyzer."},
+		{StoppedMessage, "", ""},
 		{"", "", ""},
 	}
 	for _, tc := range cases {

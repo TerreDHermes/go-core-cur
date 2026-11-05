@@ -51,6 +51,9 @@ func ensureColumns(db *sql.DB) error {
 	for _, stmt := range []string{
 		`ALTER TABLE analysis_tasks ADD COLUMN applicability TEXT`,
 		`ALTER TABLE analysis_tasks ADD COLUMN model TEXT`,
+		`ALTER TABLE analysis_tasks ADD COLUMN ai_calls INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE analysis_tasks ADD COLUMN ai_min_ms INTEGER`,
+		`ALTER TABLE analysis_tasks ADD COLUMN ai_max_ms INTEGER`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDupColumn(err) {
 			return fmt.Errorf("migrate: %w", err)
@@ -151,11 +154,95 @@ func (s *Store) Fail(ctx context.Context, id, errMsg, updatedAt string) error {
 	return rowsOne(res, "fail")
 }
 
+// Cancel marks a queued or running task as failed with the caller's message.
+// A task that is already finished is left as it is, and the bool is false.
+func (s *Store) Cancel(ctx context.Context, id, errMsg, updatedAt string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE analysis_tasks
+		SET status = 'FAILED', error_msg = ?, updated_at = ?, applicability = ?
+		WHERE id = ? AND status IN ('PENDING', 'RUNNING')`, errMsg, updatedAt, task.Uncertain, id)
+	if err != nil {
+		return false, fmt.Errorf("cancel task: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// SaveAIMetrics stores how many model calls this analysis made and the fastest
+// and slowest waits. Zero calls clears the two times.
+func (s *Store) SaveAIMetrics(ctx context.Context, id string, m task.AIMetrics) error {
+	var minMS, maxMS any
+	if m.Calls > 0 {
+		minMS = m.MinMS
+		maxMS = m.MaxMS
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE analysis_tasks
+		SET ai_calls = ?, ai_min_ms = ?, ai_max_ms = ?
+		WHERE id = ?`, m.Calls, minMS, maxMS, id)
+	if err != nil {
+		return fmt.Errorf("save ai metrics: %w", err)
+	}
+	return rowsOne(res, "save ai metrics")
+}
+
+// RequeueRunning returns tasks left RUNNING by a dead process to the queue.
+// Claim only takes PENDING, so the status has to change before they can run again.
+func (s *Store) RequeueRunning(ctx context.Context, updatedAt string) ([]string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin requeue: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id FROM analysis_tasks
+		WHERE status = 'RUNNING'
+		ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list running: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit requeue: %w", err)
+		}
+		return nil, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE analysis_tasks
+		SET status = 'PENDING', updated_at = ?
+		WHERE status = 'RUNNING'`, updatedAt); err != nil {
+		return nil, fmt.Errorf("requeue running: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit requeue: %w", err)
+	}
+	return ids, nil
+}
+
 func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       COALESCE(error_msg, ''), created_at, updated_at,
-		       COALESCE(applicability, ''), COALESCE(model, '')
+		       COALESCE(applicability, ''), COALESCE(model, ''),
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -191,7 +278,8 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 	q := `
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       '', created_at, updated_at,
-		       COALESCE(applicability, ''), COALESCE(model, '')
+		       COALESCE(applicability, ''), COALESCE(model, ''),
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms
 		FROM analysis_tasks`
 	var args []any
 	if status != "" {
@@ -262,15 +350,27 @@ type scanner interface {
 func scanTask(row scanner) (task.Task, error) {
 	var t task.Task
 	var status string
+	var calls int
+	var minMS, maxMS sql.NullInt64
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
 		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt,
 		&t.Applicability, &t.Model,
+		&calls, &minMS, &maxMS,
 	)
 	if err != nil {
 		return task.Task{}, err
 	}
 	t.Status = task.Status(status)
+	t.AICalls = calls
+	if minMS.Valid {
+		v := minMS.Int64
+		t.AIMinMS = &v
+	}
+	if maxMS.Valid {
+		v := maxMS.Int64
+		t.AIMaxMS = &v
+	}
 	return t, nil
 }
 

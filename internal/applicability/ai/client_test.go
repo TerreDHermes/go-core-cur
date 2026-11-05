@@ -50,6 +50,36 @@ func TestCallAIRejectsEmptyChoice(t *testing.T) {
 	}
 }
 
+func TestCallAIRecordsWaitIncludingFailures(t *testing.T) {
+	var n int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			return
+		}
+		http.Error(w, "busy", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	stats := NewCallStats()
+	ctx := WithCallStats(context.Background(), stats)
+	client := NewAIClient(srv.URL, "t", "m")
+	if _, err := client.CallAI(ctx, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CallAI(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CallAI(ctx, "second"); err == nil {
+		t.Fatal("expected the second call to fail")
+	}
+	calls, min, max := stats.Snapshot()
+	if calls != 2 || min > max {
+		t.Fatalf("calls %d min %s max %s", calls, min, max)
+	}
+}
+
 func TestCallAIReturnsStatusBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "busy", http.StatusBadGateway)

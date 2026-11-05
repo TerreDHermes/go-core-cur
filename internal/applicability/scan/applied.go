@@ -36,6 +36,14 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 			Detail:  "Проверка не проводилась: в патче нет файлов, сверять diff с кодом не с чем. На вывод это не повлияло.",
 		}
 	}
+	if onlyMarkdown(files) {
+		return &task.PatchCheck{
+			Ran:     false,
+			Outcome: task.PatchCheckNotRun,
+			Detail:  "Проверка не проводилась: патч меняет только markdown-файлы, кода в нём нет. Совпадение этих файлов не доказывает, что уязвимость закрыта. На вывод это не повлияло.",
+			Files:   markdownFileLines(files),
+		}
+	}
 	if len(report.PatchFiles) == 0 {
 		return &task.PatchCheck{
 			Ran:     false,
@@ -68,7 +76,13 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	var lines []string
 	allFull := true
 	anyPartial := false
+	ignoredMD := false
 	for _, file := range files {
+		if isMarkdown(file.Filename) {
+			ignoredMD = true
+			lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
+			continue
+		}
 		status, line := assessPatchFile(repoPath, file, report.PatchFiles)
 		lines = append(lines, line)
 		switch status {
@@ -82,10 +96,14 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	}
 	switch {
 	case allFull:
+		detail := "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде. Вывод — неприменима."
+		if ignoredMD {
+			detail = "Проверка проводилась. Патч применён целиком: все файлы кода и все фрагменты diff уже есть в коде. Файлы markdown в сверке не учитывались. Вывод — неприменима."
+		}
 		return &task.PatchCheck{
 			Ran:     true,
 			Outcome: task.PatchCheckFull,
-			Detail:  "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде. Вывод — неприменима.",
+			Detail:  detail,
 			Files:   lines,
 		}
 	case anyPartial:
@@ -141,16 +159,42 @@ func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchF
 }
 
 func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) bool {
-	if len(files) == 0 {
-		return false
-	}
+	sawCode := false
 	for _, file := range files {
+		if isMarkdown(file.Filename) {
+			continue
+		}
+		sawCode = true
 		status, _ := assessPatchFile(repoPath, file, matches)
 		if status != "full" {
 			return false
 		}
 	}
+	return sawCode
+}
+
+func isMarkdown(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".md")
+}
+
+func onlyMarkdown(files []task.PatchFile) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, file := range files {
+		if !isMarkdown(file.Filename) {
+			return false
+		}
+	}
 	return true
+}
+
+func markdownFileLines(files []task.PatchFile) []string {
+	lines := make([]string, 0, len(files))
+	for _, file := range files {
+		lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
+	}
+	return lines
 }
 
 type diffHunk struct {

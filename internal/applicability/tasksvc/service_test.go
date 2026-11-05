@@ -97,6 +97,37 @@ func TestOpenReusesLatestOrCreates(t *testing.T) {
 	}
 }
 
+func TestCancelPendingAndFinished(t *testing.T) {
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := New(st, &recordingQueue{})
+	svc.now = func() time.Time { return time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC) }
+	ctx := context.Background()
+	if err := st.Create(ctx, task.Task{
+		ID: "q", Status: task.StatusPending,
+		ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Cancel(ctx, "q"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, "q")
+	if err != nil || got.Status != task.StatusFailed || got.ErrorMsg != task.StoppedMessage || got.Applicability != task.Uncertain {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if err := svc.Cancel(ctx, " missing "); !errors.Is(err, task.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if err := svc.Cancel(ctx, " "); !errors.Is(err, task.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckReportsSixResults(t *testing.T) {
 	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

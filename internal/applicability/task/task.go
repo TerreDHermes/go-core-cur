@@ -37,6 +37,9 @@ type Task struct {
 	UpdatedAt     string
 	Applicability string
 	Modules       []ModuleResult
+	AICalls       int
+	AIMinMS       *int64
+	AIMaxMS       *int64
 }
 
 // ModuleResult is the outcome for one go.mod that lists PackageName.
@@ -84,9 +87,23 @@ func (t Task) CombinedReport() string {
 	return b.String()
 }
 
+// StoppedMessage is the verdict written when a person stops a running analysis.
+// It is not a failure of the model, Git, or the patch service.
+const StoppedMessage = `Остановлен принудительно нажатием на кнопку "Остановить анализ"`
+
+// AIMetrics counts model calls made while one analysis ran.
+// MinMS and MaxMS are the fastest and slowest waits, in milliseconds.
+// Both are meaningful only when Calls is greater than zero.
+type AIMetrics struct {
+	Calls int
+	MinMS int64
+	MaxMS int64
+}
+
 var (
-	ErrNotFound      = errors.New("task not found")
-	ErrNotCompleted  = errors.New("task is not completed")
-	ErrInvalidInput  = errors.New("invalid input")
-	ErrInvalidStatus = errors.New("invalid status")
+	ErrNotFound       = errors.New("task not found")
+	ErrNotCompleted   = errors.New("task is not completed")
+	ErrNotCancellable = errors.New("task cannot be cancelled")
+	ErrInvalidInput   = errors.New("invalid input")
+	ErrInvalidStatus  = errors.New("invalid status")
 )

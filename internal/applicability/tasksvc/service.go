@@ -157,6 +157,32 @@ func (s *Service) Get(ctx context.Context, id string) (task.Task, error) {
 	return s.store.Get(ctx, id)
 }
 
+// Cancel stops a queued or running analysis. The stored verdict is StoppedMessage.
+// A finished task is left unchanged.
+func (s *Service) Cancel(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("%w: id is required", task.ErrInvalidInput)
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	ok, err := s.store.Cancel(ctx, id, task.StoppedMessage, now)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		if _, err := s.store.Get(ctx, id); err != nil {
+			return err
+		}
+		return task.ErrNotCancellable
+	}
+	if s.queue != nil {
+		if abort, ok := s.queue.(interface{ Abort(string) }); ok {
+			abort.Abort(id)
+		}
+	}
+	return nil
+}
+
 func (s *Service) Report(ctx context.Context, id string) (cveID, markdown string, err error) {
 	t, err := s.Get(ctx, id)
 	if err != nil {

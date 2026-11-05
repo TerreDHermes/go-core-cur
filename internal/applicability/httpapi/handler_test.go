@@ -50,6 +50,21 @@ func (f fakeSvc) Get(context.Context, string) (task.Task, error) {
 func (f fakeSvc) Report(context.Context, string) (string, string, error) {
 	return "CVE-1", "./go.mod\n", nil
 }
+func (f fakeSvc) Cancel(context.Context, string) error {
+	return nil
+}
+
+func TestCancelRoute(t *testing.T) {
+	h := NewHandler(fakeSvc{created: "abc"}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/analysis/abc/cancel", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"FAILED"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
 
 func TestAllowBrowserAnswersPreflight(t *testing.T) {
 	h := NewHandler(fakeSvc{created: "abc"}, nil)

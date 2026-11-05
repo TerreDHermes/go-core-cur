@@ -20,6 +20,7 @@ type Service interface {
 	Check(ctx context.Context, in task.CreateInput) (string, error)
 	List(ctx context.Context, f tasksvc.ListFilter) ([]task.Task, int, error)
 	Get(ctx context.Context, id string) (task.Task, error)
+	Cancel(ctx context.Context, id string) error
 	Report(ctx context.Context, id string) (cveID, markdown string, err error)
 }
 
@@ -58,6 +59,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
 	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
+	mux.HandleFunc("POST /api/v1/analysis/{id}/cancel", h.cancel)
 	mux.HandleFunc("GET /api/v1/analysis/{id}/report", h.report)
 	mountDocs(mux)
 }
@@ -243,6 +245,21 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:     t.UpdatedAt,
 		DurationMS:    t.DurationMS(),
 		Applicability: t.PublicApplicability(),
+		AICalls:       t.AICalls,
+		AIMinMS:       t.AIMinMS,
+		AIMaxMS:       t.AIMaxMS,
+	})
+}
+
+func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.svc.Cancel(r.Context(), id); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"id":     id,
+		"status": string(task.StatusFailed),
 	})
 }
 
@@ -262,6 +279,9 @@ type taskResponse struct {
 	UpdatedAt     string           `json:"updated_at"`
 	DurationMS    *int64           `json:"duration_ms"`
 	Applicability *string          `json:"applicability"`
+	AICalls       int              `json:"ai_calls"`
+	AIMinMS       *int64           `json:"ai_min_ms"`
+	AIMaxMS       *int64           `json:"ai_max_ms"`
 }
 
 type moduleResponse struct {
@@ -311,7 +331,7 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, task.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, task.ErrNotCompleted):
+	case errors.Is(err, task.ErrNotCompleted), errors.Is(err, task.ErrNotCancellable):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		h.log.Error("request failed", "err", err)

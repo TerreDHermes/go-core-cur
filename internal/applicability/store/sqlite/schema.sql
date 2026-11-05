@@ -9,7 +9,10 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     error_msg TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    applicability TEXT
+    applicability TEXT,
+    ai_calls INTEGER NOT NULL DEFAULT 0,
+    ai_min_ms INTEGER,
+    ai_max_ms INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_created_at

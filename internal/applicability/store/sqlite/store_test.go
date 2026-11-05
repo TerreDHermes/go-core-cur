@@ -129,6 +129,70 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	}
 }
 
+func TestRequeueRunningAndAIMetrics(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	for _, item := range []task.Task{
+		{ID: "run", Status: task.StatusRunning, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "wait", Status: task.StatusPending, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z"},
+		{ID: "done", Status: task.StatusFailed, ComponentURL: "u", Branch: "b", CVEID: "c", PackageName: "p", CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z"},
+	} {
+		if err := st.Create(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids, err := st.RequeueRunning(ctx, "2026-01-04T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "run" {
+		t.Fatalf("%v", ids)
+	}
+	got, err := st.Get(ctx, "run")
+	if err != nil || got.Status != task.StatusPending {
+		t.Fatalf("%+v %v", got, err)
+	}
+	pending, err := st.ListPendingIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 || pending[0] != "run" || pending[1] != "wait" {
+		t.Fatalf("%v", pending)
+	}
+	failed, err := st.Get(ctx, "done")
+	if err != nil || failed.Status != task.StatusFailed {
+		t.Fatalf("%+v", failed)
+	}
+
+	if err := st.SaveAIMetrics(ctx, "run", task.AIMetrics{Calls: 2, MinMS: 15, MaxMS: 900}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.Get(ctx, "run")
+	if err != nil || got.AICalls != 2 || got.AIMinMS == nil || *got.AIMinMS != 15 || got.AIMaxMS == nil || *got.AIMaxMS != 900 {
+		t.Fatalf("%+v", got)
+	}
+	if err := st.SaveAIMetrics(ctx, "run", task.AIMetrics{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.Get(ctx, "run")
+	if err != nil || got.AICalls != 0 || got.AIMinMS != nil || got.AIMaxMS != nil {
+		t.Fatalf("%+v", got)
+	}
+
+	ok, err := st.Cancel(ctx, "wait", task.StoppedMessage, "2026-01-05T00:00:00Z")
+	if err != nil || !ok {
+		t.Fatalf("ok %v err %v", ok, err)
+	}
+	stopped, err := st.Get(ctx, "wait")
+	if err != nil || stopped.Status != task.StatusFailed || stopped.ErrorMsg != task.StoppedMessage || stopped.Applicability != task.Uncertain {
+		t.Fatalf("%+v", stopped)
+	}
+	ok, err = st.Cancel(ctx, "wait", task.StoppedMessage, "2026-01-06T00:00:00Z")
+	if err != nil || ok {
+		t.Fatalf("second cancel ok %v err %v", ok, err)
+	}
+}
+
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "t.db"))

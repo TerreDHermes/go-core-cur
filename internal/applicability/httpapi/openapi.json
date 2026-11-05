@@ -301,7 +301,7 @@
         "tags": ["analysis"],
         "operationId": "getAnalysis",
         "summary": "Статус и результат по id",
-        "description": "Полная задача. Пока статус `PENDING` или `RUNNING`, `applicability` равен `null`, а `modules` пустой. У `COMPLETED` у каждого модуля есть `verdict`, `applicability` и журнал `report_md`. У `FAILED` заполнен `error_msg`.",
+        "description": "Полная задача. Пока статус `PENDING` или `RUNNING`, `applicability` равен `null`, а `modules` пустой. У `COMPLETED` у каждого модуля есть `verdict`, `applicability` и журнал `report_md`. У `FAILED` заполнен `error_msg`.\n\n`ai_calls`, `ai_min_ms` и `ai_max_ms` — сколько раз этот анализ обращался к модели и сколько миллисекунд ждали самый быстрый и самый долгий ответ. Неудачный ответ тоже считается. Пока задача в очереди или в работе, счётчик ещё не записан: `ai_calls` равен 0, времена `null`. После завершения, в том числе у упавшей и остановленной задачи, там итог.",
         "parameters": [
           {
             "name": "id",
@@ -369,6 +369,55 @@
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/Error" },
                 "example": { "error": "task not found" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    },
+    "/api/v1/analysis/{id}/cancel": {
+      "post": {
+        "tags": ["analysis"],
+        "operationId": "cancelAnalysis",
+        "summary": "Остановить анализ",
+        "description": "Останавливает задачу в очереди или в работе. Статус становится `FAILED`, `applicability` — `uncertain`, а `error_msg` — «Остановлен принудительно нажатием на кнопку \"Остановить анализ\"». Это не сбой модели, Git или сервиса патчей, поэтому `error_source` пустой. Текущая работа прерывается.\n\nУже завершённую или уже упавшую задачу ручка не меняет.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Анализ остановлен",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "status"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": { "type": "string", "example": "FAILED" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Задачи с таким id нет",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "409": {
+            "description": "Задачу уже нельзя остановить",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "task cannot be cancelled" }
               }
             }
           },
@@ -526,7 +575,23 @@
                 "type": "string",
                 "description": "Короткая фраза для человека. Подробности остаются в error_msg."
               },
-              "updated_at": { "type": "string", "format": "date-time" }
+              "updated_at": { "type": "string", "format": "date-time" },
+              "ai_calls": {
+                "type": "integer",
+                "description": "Сколько раз анализ обращался к модели. Ноль, если обращений не было или задача ещё не закончилась."
+              },
+              "ai_min_ms": {
+                "type": "integer",
+                "format": "int64",
+                "nullable": true,
+                "description": "Самое короткое ожидание ответа модели, в миллисекундах. null, если обращений не было."
+              },
+              "ai_max_ms": {
+                "type": "integer",
+                "format": "int64",
+                "nullable": true,
+                "description": "Самое долгое ожидание ответа модели, в миллисекундах. null, если обращений не было."
+              }
             }
           }
         ]

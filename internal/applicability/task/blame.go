@@ -13,6 +13,9 @@ type ErrorBlame struct {
 // AI HUB is the model gateway. CVE Patch Analyzer is this service.
 // The patch service and Git are separate, because those calls leave this process.
 func BlameError(msg string) ErrorBlame {
+	if msg == StoppedMessage {
+		return ErrorBlame{}
+	}
 	lower := strings.ToLower(msg)
 	if strings.TrimSpace(msg) == "" {
 		return ErrorBlame{}

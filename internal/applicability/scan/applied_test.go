@@ -95,3 +95,64 @@ func TestDeletedFileCountsOnlyWhenGone(t *testing.T) {
 		t.Fatal("deleted file still present")
 	}
 }
+
+func TestMarkdownDoesNotBlockAFullPatch(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	mustWrite(t, filepath.Join(root, rel), "func HostID() string {\n\treturn \"fixed\"\n}\n")
+	mustWrite(t, filepath.Join(root, "CHANGELOG.md"), "unrelated\n")
+	code := task.PatchFile{Filename: rel, Patch: "" +
+		"@@ -1,3 +1,3 @@\n" +
+		" func HostID() string {\n" +
+		"-\treturn \"vuln\"\n" +
+		"+\treturn \"fixed\"\n" +
+		" }\n"}
+	md := task.PatchFile{Filename: "CHANGELOG.MD", Patch: "" +
+		"@@ -1 +1 @@\n" +
+		"-old changelog\n" +
+		"+new changelog\n"}
+	matches := []task.PatchFileMatch{
+		{Filename: rel, Found: true, Path: "./" + rel},
+		{Filename: "CHANGELOG.MD", Found: true, Path: "./CHANGELOG.md"},
+	}
+	if !patchFullyApplied(root, []task.PatchFile{code, md}, matches) {
+		t.Fatal("changelog must not keep an otherwise applied patch open")
+	}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	if note := noteAppliedPatch(root, []task.PatchFile{code, md}, &report); note == "" || report.PatchApplied == nil || !report.PatchApplied.Applied {
+		t.Fatal(note, report.PatchCheck)
+	}
+	if report.PatchCheck.Outcome != task.PatchCheckFull || !strings.Contains(report.PatchCheck.Section(), "markdown") {
+		t.Fatal(report.PatchCheck.Section())
+	}
+	if decideApplicability(report, "") != task.NotApplicable {
+		t.Fatal(decideApplicability(report, ""))
+	}
+}
+
+func TestMarkdownOnlyPatchDoesNotCountAsApplied(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "CHANGELOG.md"), "new changelog\n")
+	md := task.PatchFile{Filename: "docs/CHANGELOG.md", Patch: "" +
+		"@@ -1 +1 @@\n" +
+		"-old changelog\n" +
+		"+new changelog\n"}
+	matches := []task.PatchFileMatch{{Filename: "docs/CHANGELOG.md", Found: true, Path: "./CHANGELOG.md"}}
+	if patchFullyApplied(root, []task.PatchFile{md}, matches) {
+		t.Fatal("a markdown-only patch is not a code fix")
+	}
+	report := task.Report{PatchFiles: matches}
+	if note := noteAppliedPatch(root, []task.PatchFile{md}, &report); note != "" || report.PatchApplied != nil {
+		t.Fatal(note, report.PatchApplied)
+	}
+	if report.PatchCheck == nil || report.PatchCheck.Ran || report.PatchCheck.Outcome != task.PatchCheckNotRun {
+		t.Fatalf("%+v", report.PatchCheck)
+	}
+	if !strings.Contains(report.PatchCheck.Section(), "только markdown") {
+		t.Fatal(report.PatchCheck.Section())
+	}
+	if decideApplicability(report, "") == task.NotApplicable {
+		t.Fatal("markdown must not force not applicable")
+	}
+}

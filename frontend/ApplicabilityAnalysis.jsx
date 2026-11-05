@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 
 const API_BASE = '/api/v1/analysis';
+const STOPPED_MESSAGE = 'Остановлен принудительно нажатием на кнопку "Остановить анализ"';
 
 const apiService = {
   createTask: async (data) => {
@@ -43,6 +44,15 @@ const apiService = {
   },
 
   downloadReportUrl: (id) => `${API_BASE}/${id}/report`,
+
+  stopTask: async (id) => {
+    const res = await fetch(`${API_BASE}/${id}/cancel`, { method: 'POST' });
+    const json = await res.json().catch(() => ({}));
+    if (res.status === 409) throw new Error('Анализ уже завершился');
+    if (res.status === 404) throw new Error('Анализ не найден');
+    if (!res.ok) throw new Error(json.error || `Ошибка сервера (${res.status})`);
+    return json;
+  },
 
   getDefaultModel: async () => {
     const res = await fetch(`${API_BASE}/default-model`);
@@ -357,6 +367,7 @@ function ModelPicker({ value, onChange }) {
 }
 
 function blameError(message) {
+  if (message === STOPPED_MESSAGE) return null;
   const lower = (message || '').toLowerCase();
   if (!lower.trim()) return null;
   const ai = ['ai api returned', 'do ai request', 'ai grep', 'ai verdict', 'ai report', 'ai client', 'ai base url', 'ai response', 'api.ai.sbt', 'rate_limit', 'admission_queue']
@@ -462,6 +473,8 @@ export default function ApplicabilityAnalysis() {
 
   const [selectedModuleIndex, setSelectedModuleIndex] = useState(0);
   const [selectedModel, setSelectedModel] = useState('');
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState('');
 
   const isDetailView = !!taskId;
   const isListView = location.pathname.includes('/list');
@@ -529,6 +542,22 @@ export default function ApplicabilityAnalysis() {
   const handleClearForm = () => {
     setFormData({ url: '', branch: '', cveId: '', packageName: '' });
     setCreateError('');
+  };
+
+  const handleStopAnalysis = async () => {
+    if (!currentTask || stopping) return;
+    if (!window.confirm('Остановить анализ?')) return;
+    setStopping(true);
+    setStopError('');
+    try {
+      await apiService.stopTask(currentTask.id);
+      const data = await apiService.getTaskDetails(currentTask.id);
+      setCurrentTask(data);
+    } catch (err) {
+      setStopError(err.message || 'Не удалось остановить анализ');
+    } finally {
+      setStopping(false);
+    }
   };
 
   const handleRetryAnalysis = () => {
@@ -616,12 +645,17 @@ export default function ApplicabilityAnalysis() {
     if (!currentTask) return <div style={fullPageStyle}><div style={boardContainerStyle}><div style={{ textAlign: 'center', padding: '6rem' }}><h2>Загрузка...</h2></div></div></div>;
 
     const isError = currentTask.status === 'FAILED';
+    const isStopped = isError && currentTask.error_msg === STOPPED_MESSAGE;
     const isDone = currentTask.status === 'COMPLETED';
     const isRunning = currentTask.status === 'RUNNING';
     const isPending = currentTask.status === 'PENDING';
     const taskResult = applicabilityView(currentTask.applicability);
     const moduleResult = applicabilityView(activeModule?.applicability, 'module');
     const durationText = formatDuration(currentTask.duration_ms);
+    const aiReady = isDone || isError;
+    const aiCallsText = aiReady ? String(currentTask.ai_calls || 0) : '—';
+    const aiFastText = aiReady && currentTask.ai_calls > 0 ? (formatDuration(currentTask.ai_min_ms) || '—') : '—';
+    const aiSlowText = aiReady && currentTask.ai_calls > 0 ? (formatDuration(currentTask.ai_max_ms) || '—') : '—';
 
     let statusTheme;
     if (isError) statusTheme = theme.error;
@@ -629,9 +663,11 @@ export default function ApplicabilityAnalysis() {
     else if (isRunning || isPending) statusTheme = theme.running;
     else statusTheme = theme.pending;
 
-    const resultHint = isError
-      ? 'Задача завершилась с ошибкой, поэтому результат неопределенный'
-      : taskResult?.hint;
+    const resultHint = isStopped
+      ? 'Анализ остановлен до вывода о применимости'
+      : isError
+        ? 'Задача завершилась с ошибкой, поэтому результат неопределенный'
+        : taskResult?.hint;
 
     return (
       <div style={fullPageStyle}>
@@ -662,7 +698,23 @@ export default function ApplicabilityAnalysis() {
           </div>
 
           <div style={{ ...innerCardStyle, marginBottom: '2.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+              {(isRunning || isPending) && (
+                <button
+                  onClick={handleStopAnalysis}
+                  disabled={stopping}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.6rem 1.25rem', borderRadius: '0.75rem',
+                    border: `1px solid ${theme.error.border}`, background: theme.error.bg,
+                    color: theme.error.text, fontSize: '0.9rem', fontWeight: '700',
+                    cursor: stopping ? 'default' : 'pointer', transition: 'all 0.2s',
+                    opacity: stopping ? 0.7 : 1
+                  }}
+                >
+                  {stopping ? 'Останавливаем...' : 'Остановить анализ'}
+                </button>
+              )}
               <button
                 onClick={handleRetryAnalysis}
                 style={{
@@ -680,6 +732,9 @@ export default function ApplicabilityAnalysis() {
                 Повторить анализ
               </button>
             </div>
+            {stopError && (
+              <p style={{ margin: '-0.5rem 0 1rem', textAlign: 'right', color: theme.error.text, fontWeight: '600' }}>{stopError}</p>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
@@ -697,6 +752,18 @@ export default function ApplicabilityAnalysis() {
                 {showDuration(currentTask.status, currentTask.duration_ms) ? renderDuration(currentTask.duration_ms) : (
                   <span style={{ color: theme.textMuted, fontWeight: '600' }}>—</span>
                 )}
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Обращений к ИИ</div>
+                <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{aiCallsText}</b>
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Самый быстрый ответ</div>
+                <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{aiFastText}</b>
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Самый долгий ответ</div>
+                <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{aiSlowText}</b>
               </div>
             </div>
 
@@ -796,6 +863,10 @@ export default function ApplicabilityAnalysis() {
             </div>
             {(isRunning || isPending) ? (
               <div style={{ padding: '3rem', textAlign: 'center', color: theme.textMuted, fontWeight: '500', fontSize: '1.2rem', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>Информация появится после завершения анализа</div>
+            ) : isStopped ? (
+              <div style={{ padding: '2.5rem 3rem', textAlign: 'center', color: theme.error.text, fontWeight: '700', fontSize: '1.3rem', lineHeight: '1.7', border: `1px solid ${theme.error.border}`, borderRadius: '1rem', backgroundColor: theme.error.bg, borderLeft: `8px solid ${theme.error.accent}` }}>
+                {STOPPED_MESSAGE}
+              </div>
             ) : isError ? (
               <div style={{ padding: '2rem 2.25rem', color: theme.error.text, fontWeight: '700', fontSize: '1.2rem', border: `1px solid ${theme.error.border}`, borderRadius: '1rem', backgroundColor: theme.error.bg, borderLeft: `8px solid ${theme.error.accent}` }}>
                 <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>Анализ завершился с ошибкой</div>
@@ -841,9 +912,17 @@ export default function ApplicabilityAnalysis() {
 
           <div>
             <h2 style={{ fontSize: '1.35rem', fontWeight: '800', marginBottom: '1.5rem', color: theme.textMain }}>Полный отчет</h2>
-            {(isRunning || isError || isPending) ? (
-              <div style={{ padding: isError ? '2rem 2.25rem' : '3rem', textAlign: isError ? 'left' : 'center', color: theme.textMuted, fontWeight: '500', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
-                {isError ? <ErrorDetails task={currentTask} /> : 'Отчет сформируется позже'}
+            {(isRunning || isPending) ? (
+              <div style={{ padding: '3rem', textAlign: 'center', color: theme.textMuted, fontWeight: '500', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
+                Отчет сформируется позже
+              </div>
+            ) : isStopped ? (
+              <div style={{ padding: '3rem', textAlign: 'center', color: theme.textMuted, fontWeight: '500', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
+                Отчет не сформирован: анализ остановлен до конца.
+              </div>
+            ) : isError ? (
+              <div style={{ padding: '2rem 2.25rem', textAlign: 'left', color: theme.textMuted, fontWeight: '500', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
+                <ErrorDetails task={currentTask} />
               </div>
             ) : (
               <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.7)', borderRadius: '1rem', border: `1px solid rgba(203, 213, 225, 0.8)`, overflow: 'hidden' }}>
