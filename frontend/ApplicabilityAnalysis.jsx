@@ -758,11 +758,11 @@ export default function ApplicabilityAnalysis() {
                 <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{aiCallsText}</b>
               </div>
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Самый быстрый ответ</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Самый быстрый ответ от ИИ</div>
                 <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{aiFastText}</b>
               </div>
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Самый долгий ответ</div>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Самый долгий ответ от ИИ</div>
                 <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{aiSlowText}</b>
               </div>
             </div>
