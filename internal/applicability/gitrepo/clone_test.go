@@ -1,6 +1,7 @@
 package gitrepo
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,27 @@ func TestCloneArgsKeepTokenOutOfArgv(t *testing.T) {
 	}
 	if strings.Contains(joined, "checkout") {
 		t.Fatalf("args: %s", joined)
+	}
+}
+
+func TestCertificateFailureIsRetriedWithoutVerification(t *testing.T) {
+	if !certificateError(fmt.Errorf("git clone: exit status 128: SSL certificate problem: unable to get local issuer certificate (20)")) {
+		t.Fatal("ssl")
+	}
+	if certificateError(fmt.Errorf("git clone: authentication failed")) {
+		t.Fatal("auth")
+	}
+	args := cloneArgs("oauth2", false, "https://git.slo/dapp/dapp-cilium.git", "release/k8sc-6.0.0", "/tmp/repo")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "http.sslVerify=false") || !strings.Contains(joined, "username=oauth2") {
+		t.Fatal(joined)
+	}
+	if strings.Contains(joined, "secret-token") {
+		t.Fatal(joined)
+	}
+	checked := strings.Join(cloneArgs("oauth2", true, "https://git.slo/dapp/dapp-cilium.git", "release/k8sc-6.0.0", "/tmp/repo"), " ")
+	if strings.Contains(checked, "sslVerify") {
+		t.Fatal(checked)
 	}
 }
 

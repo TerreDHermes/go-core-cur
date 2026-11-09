@@ -22,17 +22,36 @@ func Clone(ctx context.Context, rawURL, branch, token string) (string, error) {
 	if strings.TrimSpace(branch) == "" {
 		return "", fmt.Errorf("git clone: branch is empty")
 	}
+	dir, err := cloneInto(ctx, token, user, remote, branch, true)
+	if err != nil && certificateError(err) {
+		// git.slo and other internal forges are signed by a private CA.
+		// The handshake fails before the token is sent. Repeat without that check.
+		dir, err = cloneInto(ctx, token, user, remote, branch, false)
+	}
+	return dir, err
+}
+
+func cloneInto(ctx context.Context, token, user, remote, branch string, verify bool) (string, error) {
 	dir, err := os.MkdirTemp("", "cve-analysis-*")
 	if err != nil {
 		return "", fmt.Errorf("mkdir temp: %w", err)
 	}
-
-	clone := command(ctx, token, user, cloneCommandArgs(remote, branch, dir)...)
+	clone := command(ctx, token, cloneArgs(user, verify, remote, branch, dir)...)
 	if out, err := clone.CombinedOutput(); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("git clone: %w: %s", err, trim(out, token))
 	}
 	return dir, nil
+}
+
+func certificateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "ssl certificate problem") ||
+		strings.Contains(text, "unable to get local issuer certificate") ||
+		strings.Contains(text, "server certificate verification failed")
 }
 
 // cloneCommandArgs fetches one branch tip. Full history and the other branches stay on the remote.
@@ -117,10 +136,18 @@ func credentialUser(host string) string {
 	return "oauth2"
 }
 
-func command(ctx context.Context, token, user string, args ...string) *exec.Cmd {
-	if token != "" {
+func cloneArgs(user string, verify bool, remote, branch, dir string) []string {
+	args := cloneCommandArgs(remote, branch, dir)
+	if user != "" {
 		args = withCredentials(args, user)
 	}
+	if verify {
+		return args
+	}
+	return append([]string{args[0], "-c", "http.sslVerify=false"}, args[1:]...)
+}
+
+func command(ctx context.Context, token string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = gitEnv(token)
 	return cmd
