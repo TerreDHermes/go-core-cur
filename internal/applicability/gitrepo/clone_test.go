@@ -10,7 +10,7 @@ func TestCloneArgsKeepTokenOutOfArgv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := withCredentials([]string{"git", "clone", "--quiet", remote, "/tmp/repo"})
+	args := withCredentials(cloneCommandArgs(remote, "main", "/tmp/repo"))
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "secret-token") {
 		t.Fatalf("token leaked into args: %s", joined)
@@ -19,6 +19,12 @@ func TestCloneArgsKeepTokenOutOfArgv(t *testing.T) {
 		t.Fatalf("args: %s", joined)
 	}
 	if !strings.Contains(joined, "credential.helper=") || !strings.Contains(joined, "$GIT_TOKEN") {
+		t.Fatalf("args: %s", joined)
+	}
+	if !strings.Contains(joined, "--single-branch") || !strings.Contains(joined, "--depth 1") || !strings.Contains(joined, "--branch main") {
+		t.Fatalf("args: %s", joined)
+	}
+	if strings.Contains(joined, "checkout") {
 		t.Fatalf("args: %s", joined)
 	}
 }

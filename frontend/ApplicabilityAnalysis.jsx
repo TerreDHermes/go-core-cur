@@ -652,10 +652,12 @@ export default function ApplicabilityAnalysis() {
     const taskResult = applicabilityView(currentTask.applicability);
     const moduleResult = applicabilityView(activeModule?.applicability, 'module');
     const durationText = formatDuration(currentTask.duration_ms);
-    const aiReady = isDone || isError;
-    const aiCallsText = aiReady ? String(currentTask.ai_calls || 0) : '—';
-    const aiFastText = aiReady && currentTask.ai_calls > 0 ? (formatDuration(currentTask.ai_min_ms) || '—') : '—';
-    const aiSlowText = aiReady && currentTask.ai_calls > 0 ? (formatDuration(currentTask.ai_max_ms) || '—') : '—';
+    const terminal = isDone || isError;
+    const aiKnown = terminal || currentTask.ai_calls > 0 || currentTask.ai_min_ms != null || currentTask.ai_max_ms != null;
+    const cloneText = currentTask.clone_ms == null ? '—' : (formatDuration(currentTask.clone_ms) || '—');
+    const aiCallsText = aiKnown ? String(currentTask.ai_calls ?? 0) : '—';
+    const aiFastText = currentTask.ai_min_ms == null ? '—' : (formatDuration(currentTask.ai_min_ms) || '—');
+    const aiSlowText = currentTask.ai_max_ms == null ? '—' : (formatDuration(currentTask.ai_max_ms) || '—');
 
     let statusTheme;
     if (isError) statusTheme = theme.error;
@@ -752,6 +754,10 @@ export default function ApplicabilityAnalysis() {
                 {showDuration(currentTask.status, currentTask.duration_ms) ? renderDuration(currentTask.duration_ms) : (
                   <span style={{ color: theme.textMuted, fontWeight: '600' }}>—</span>
                 )}
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Клонирование</div>
+                <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{cloneText}</b>
               </div>
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
                 <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Обращений к ИИ</div>

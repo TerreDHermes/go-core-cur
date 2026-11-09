@@ -151,6 +151,12 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 	if ok, err := st.Claim(ctx, "run", "2026-01-01T00:00:02Z"); err != nil || !ok {
 		t.Fatalf("claim ok=%v err=%v", ok, err)
 	}
+	if err := st.SaveCloneMS(ctx, "run", 1500); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveAIMetrics(ctx, "run", task.AIMetrics{Calls: 4, MinMS: 10, MaxMS: 20}); err != nil {
+		t.Fatal(err)
+	}
 	ids, err := st.RequeueRunning(ctx, "2026-01-04T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +165,7 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 		t.Fatalf("%v", ids)
 	}
 	got, err := st.Get(ctx, "run")
-	if err != nil || got.Status != task.StatusPending || got.StartedAt != "" {
+	if err != nil || got.Status != task.StatusPending || got.StartedAt != "" || got.CloneMS != nil || got.AICalls != 0 || got.AIMinMS != nil || got.AIMaxMS != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	pending, err := st.ListPendingIDs(ctx)
@@ -185,7 +191,7 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = st.Get(ctx, "run")
-	if err != nil || got.AICalls != 0 || got.AIMinMS != nil || got.AIMaxMS != nil {
+	if err != nil || got.AICalls != 2 || got.AIMinMS == nil || *got.AIMinMS != 15 || got.AIMaxMS == nil || *got.AIMaxMS != 900 {
 		t.Fatalf("%+v", got)
 	}
 

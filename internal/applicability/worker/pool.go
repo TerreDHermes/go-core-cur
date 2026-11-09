@@ -134,7 +134,11 @@ func (p *Pool) handle(id string) {
 		if rec := recover(); rec != nil {
 			p.persistAI(id, stats)
 			p.fail(id, fmt.Errorf("panic: %v", rec))
+			return
 		}
+		// A deadline can leave the task failed after the last model call.
+		// Saving here keeps that call on the page even when finish already returned.
+		p.persistAI(id, stats)
 	}()
 
 	log := p.log.With("task_id", id)
@@ -164,7 +168,21 @@ func (p *Pool) handle(id string) {
 		p.cancels.Delete(id)
 	}()
 
+	// The deadline can fire while git or deadcode is still exiting.
+	// Write the calls we already have so the page is not left blank.
+	stopStats := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			p.persistAI(id, stats)
+		case <-stopStats:
+		}
+	}()
+	defer close(stopStats)
+
+	cloneStarted := time.Now()
 	dir, err := p.clone.Clone(ctx, t.ComponentURL, t.Branch)
+	p.persistClone(id, time.Since(cloneStarted))
 	if dir != "" {
 		defer p.clone.Remove(dir)
 	}
@@ -231,6 +249,16 @@ func (p *Pool) persistAI(id string, stats *ai.CallStats) {
 	}
 	if err := p.store.SaveAIMetrics(context.Background(), id, m); err != nil {
 		p.log.Error("save ai metrics", "task_id", id, "err", err)
+	}
+}
+
+func (p *Pool) persistClone(id string, d time.Duration) {
+	ms := d.Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
+	if err := p.store.SaveCloneMS(context.Background(), id, ms); err != nil {
+		p.log.Error("save clone time", "task_id", id, "err", err)
 	}
 }
 

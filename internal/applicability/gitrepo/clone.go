@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-// Clone creates a temp directory, clones url into it and checks out branch.
+// Clone creates a temp directory and clones only branch into it.
+// A separate checkout is not used: the remote sends that one branch, at depth 1.
 // The caller must Remove the returned directory.
 // token is the HTTPS password from GIT_TOKEN. An SSH URL is cloned over HTTPS so the
 // same token is used. An empty token clones the URL as given, without credentials.
@@ -18,23 +19,25 @@ func Clone(ctx context.Context, rawURL, branch, token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(branch) == "" {
+		return "", fmt.Errorf("git clone: branch is empty")
+	}
 	dir, err := os.MkdirTemp("", "cve-analysis-*")
 	if err != nil {
 		return "", fmt.Errorf("mkdir temp: %w", err)
 	}
 
-	clone := command(ctx, token, "git", "clone", "--quiet", remote, dir)
+	clone := command(ctx, token, cloneCommandArgs(remote, branch, dir)...)
 	if out, err := clone.CombinedOutput(); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("git clone: %w: %s", err, trim(out, token))
 	}
-
-	checkout := command(ctx, token, "git", "-C", dir, "checkout", "--quiet", branch)
-	if out, err := checkout.CombinedOutput(); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", fmt.Errorf("git checkout %s: %w: %s", branch, err, trim(out, token))
-	}
 	return dir, nil
+}
+
+// cloneCommandArgs fetches one branch tip. Full history and the other branches stay on the remote.
+func cloneCommandArgs(remote, branch, dir string) []string {
+	return []string{"git", "clone", "--quiet", "--single-branch", "--depth", "1", "--branch", branch, remote, dir}
 }
 
 // cloneURL turns git@host:path and ssh://git@host/path into https://host/path when a

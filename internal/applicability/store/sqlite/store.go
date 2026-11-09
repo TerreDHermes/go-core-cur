@@ -55,6 +55,7 @@ func ensureColumns(db *sql.DB) error {
 		`ALTER TABLE analysis_tasks ADD COLUMN ai_min_ms INTEGER`,
 		`ALTER TABLE analysis_tasks ADD COLUMN ai_max_ms INTEGER`,
 		`ALTER TABLE analysis_tasks ADD COLUMN started_at TEXT`,
+		`ALTER TABLE analysis_tasks ADD COLUMN clone_ms INTEGER`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDupColumn(err) {
 			return fmt.Errorf("migrate: %w", err)
@@ -173,21 +174,40 @@ func (s *Store) Cancel(ctx context.Context, id, errMsg, updatedAt string) (bool,
 }
 
 // SaveAIMetrics stores how many model calls this analysis made and the fastest
-// and slowest waits. Zero calls clears the two times.
+// and slowest waits. A later snapshot with zero calls does not erase a count
+// that was already stored. Requeue clears the count for the next attempt.
 func (s *Store) SaveAIMetrics(ctx context.Context, id string, m task.AIMetrics) error {
-	var minMS, maxMS any
-	if m.Calls > 0 {
-		minMS = m.MinMS
-		maxMS = m.MaxMS
+	if m.Calls <= 0 {
+		// A late empty snapshot must not wipe calls that already landed.
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE analysis_tasks
+			SET ai_calls = 0, ai_min_ms = NULL, ai_max_ms = NULL
+			WHERE id = ? AND COALESCE(ai_calls, 0) = 0`, id); err != nil {
+			return fmt.Errorf("save ai metrics: %w", err)
+		}
+		return nil
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE analysis_tasks
 		SET ai_calls = ?, ai_min_ms = ?, ai_max_ms = ?
-		WHERE id = ?`, m.Calls, minMS, maxMS, id)
+		WHERE id = ?`, m.Calls, m.MinMS, m.MaxMS, id)
 	if err != nil {
 		return fmt.Errorf("save ai metrics: %w", err)
 	}
 	return rowsOne(res, "save ai metrics")
+}
+
+// SaveCloneMS records how long the branch clone took, including a clone that failed.
+func (s *Store) SaveCloneMS(ctx context.Context, id string, ms int64) error {
+	if ms < 0 {
+		ms = 0
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE analysis_tasks SET clone_ms = ? WHERE id = ?`, ms, id)
+	if err != nil {
+		return fmt.Errorf("save clone time: %w", err)
+	}
+	return rowsOne(res, "save clone time")
 }
 
 // SetModel records the model that finished the analysis after a queue fallback.
@@ -238,7 +258,8 @@ func (s *Store) RequeueRunning(ctx context.Context, updatedAt string) ([]string,
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE analysis_tasks
-		SET status = 'PENDING', updated_at = ?, started_at = NULL
+		SET status = 'PENDING', updated_at = ?, started_at = NULL, clone_ms = NULL,
+		    ai_calls = 0, ai_min_ms = NULL, ai_max_ms = NULL
 		WHERE status = 'RUNNING'`, updatedAt); err != nil {
 		return nil, fmt.Errorf("requeue running: %w", err)
 	}
@@ -253,7 +274,7 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       COALESCE(error_msg, ''), created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
-		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -290,7 +311,7 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       '', created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
-		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms
 		FROM analysis_tasks`
 	var args []any
 	if status != "" {
@@ -362,12 +383,12 @@ func scanTask(row scanner) (task.Task, error) {
 	var t task.Task
 	var status string
 	var calls int
-	var minMS, maxMS sql.NullInt64
+	var minMS, maxMS, cloneMS sql.NullInt64
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
 		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt, &t.StartedAt,
 		&t.Applicability, &t.Model,
-		&calls, &minMS, &maxMS,
+		&calls, &minMS, &maxMS, &cloneMS,
 	)
 	if err != nil {
 		return task.Task{}, err
@@ -381,6 +402,10 @@ func scanTask(row scanner) (task.Task, error) {
 	if maxMS.Valid {
 		v := maxMS.Int64
 		t.AIMaxMS = &v
+	}
+	if cloneMS.Valid {
+		v := cloneMS.Int64
+		t.CloneMS = &v
 	}
 	return t, nil
 }

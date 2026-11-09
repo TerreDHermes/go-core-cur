@@ -128,6 +128,48 @@ func TestHandleStoresSwitchedModel(t *testing.T) {
 	}
 }
 
+type deadlineScan struct{}
+
+func (deadlineScan) Scan(ctx context.Context, _ scan.Input) ([]task.ModuleResult, error) {
+	if stats := ai.CallStatsFrom(ctx); stats != nil {
+		stats.Observe(12 * time.Millisecond)
+		stats.Observe(40 * time.Millisecond)
+	}
+	return nil, context.DeadlineExceeded
+}
+
+func TestDeadlineKeepsCloneAndAIStats(t *testing.T) {
+	st, err := sqlite.Open(t.TempDir() + "/t.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	now := "2026-01-01T00:00:00Z"
+	if err := st.Create(context.Background(), task.Task{
+		ID: "t1", Status: task.StatusPending,
+		ComponentURL: "https://example.com/r", Branch: "main",
+		CVEID: "CVE-1", PackageName: "pkg",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p := New(st, pathClone{dir: t.TempDir()}, deadlineScan{}, 1, 4, time.Minute, nil)
+	p.handle("t1")
+	got, err := st.Get(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != task.StatusFailed || !strings.Contains(got.ErrorMsg, "deadline exceeded") {
+		t.Fatalf("%s %s", got.Status, got.ErrorMsg)
+	}
+	if got.CloneMS == nil || *got.CloneMS < 0 {
+		t.Fatalf("clone %v", got.CloneMS)
+	}
+	if got.AICalls != 2 || got.AIMinMS == nil || *got.AIMinMS != 12 || got.AIMaxMS == nil || *got.AIMaxMS != 40 {
+		t.Fatalf("calls %d min %v max %v", got.AICalls, got.AIMinMS, got.AIMaxMS)
+	}
+}
+
 func TestHandleStoresAICallTimes(t *testing.T) {
 	st, err := sqlite.Open(t.TempDir() + "/t.db")
 	if err != nil {
