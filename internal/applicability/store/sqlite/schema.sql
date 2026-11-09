@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     ai_calls INTEGER NOT NULL DEFAULT 0,
     ai_min_ms INTEGER,
     ai_max_ms INTEGER,
-    clone_ms INTEGER
+    clone_ms INTEGER,
+    go_mod_count INTEGER,
+    stop_stage TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_created_at

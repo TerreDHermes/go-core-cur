@@ -576,6 +576,15 @@
                 "description": "Короткая фраза для человека. Подробности остаются в error_msg."
               },
               "updated_at": { "type": "string", "format": "date-time" },
+              "go_mod_count": {
+                "type": "integer",
+                "nullable": true,
+                "description": "Сколько файлов go.mod успели найти. null, пока поиск не начинался. Остаётся и после обрыва по дедлайну."
+              },
+              "stop_stage": {
+                "type": "string",
+                "description": "На каком этапе анализ остановился и сколько go.mod к этому моменту было найдено. Пусто, если анализ дошёл до конца или ещё не дошёл до сканирования."
+              },
               "clone_ms": {
                 "type": "integer",
                 "format": "int64",

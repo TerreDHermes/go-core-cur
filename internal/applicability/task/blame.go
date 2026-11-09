@@ -45,6 +45,9 @@ func BlameError(msg string) ErrorBlame {
 	if strings.Contains(lower, "deadcode") {
 		return ErrorBlame{Source: "CVE Patch Analyzer", Hint: "В анализе не найден инструмент deadcode."}
 	}
+	if strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "timeout") {
+		return ErrorBlame{Source: "CVE Patch Analyzer", Hint: "Анализ не уложился в отведённое время."}
+	}
 	return ErrorBlame{Source: "CVE Patch Analyzer", Hint: "Ошибка на стороне CVE Patch Analyzer."}
 }
 

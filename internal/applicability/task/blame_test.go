@@ -27,6 +27,8 @@ func TestBlameError(t *testing.T) {
 		{"git clone: exit status 128: authentication failed", "Git", "Не удалось получить репозиторий."},
 		{"git checkout release: context deadline exceeded", "Git", "Репозиторий не скачался за отведённое время."},
 		{"бинарник deadcode не найден в PATH", "CVE Patch Analyzer", "В анализе не найден инструмент deadcode."},
+		{"Остановились на этапе «проверка достижимости», 2 из 8 (./go.mod). Найдено go.mod: 17. context deadline exceeded", "CVE Patch Analyzer", "Анализ не уложился в отведённое время."},
+		{"context deadline exceeded", "CVE Patch Analyzer", "Анализ не уложился в отведённое время."},
 		{"panic: runtime error", "CVE Patch Analyzer", "Ошибка на стороне CVE Patch Analyzer."},
 		{StoppedMessage, "", ""},
 		{"", "", ""},

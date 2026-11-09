@@ -402,6 +402,9 @@ function ErrorDetails({ task }) {
   const blame = taskBlame(task);
   return (
     <div style={{ textAlign: 'left' }}>
+      {task.stop_stage && (
+        <div style={{ textAlign: 'center', marginBottom: '1.25rem', fontSize: '1.15rem', fontWeight: '700', lineHeight: '1.55', color: theme.error.text }}>{task.stop_stage}</div>
+      )}
       {blame && (
         <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
           <div style={{ fontSize: '0.78rem', fontWeight: '800', letterSpacing: '0.06em', textTransform: 'uppercase', color: theme.error.text, opacity: 0.8 }}>Виноват</div>
@@ -655,6 +658,7 @@ export default function ApplicabilityAnalysis() {
     const terminal = isDone || isError;
     const aiKnown = terminal || currentTask.ai_calls > 0 || currentTask.ai_min_ms != null || currentTask.ai_max_ms != null;
     const cloneText = currentTask.clone_ms == null ? '—' : (formatDuration(currentTask.clone_ms) || '—');
+    const goModText = currentTask.go_mod_count == null ? '—' : String(currentTask.go_mod_count);
     const aiCallsText = aiKnown ? String(currentTask.ai_calls ?? 0) : '—';
     const aiFastText = currentTask.ai_min_ms == null ? '—' : (formatDuration(currentTask.ai_min_ms) || '—');
     const aiSlowText = currentTask.ai_max_ms == null ? '—' : (formatDuration(currentTask.ai_max_ms) || '—');
@@ -758,6 +762,10 @@ export default function ApplicabilityAnalysis() {
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
                 <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Клонирование</div>
                 <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{cloneText}</b>
+              </div>
+              <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>go.mod</div>
+                <b style={{ color: theme.textMain, fontSize: '1.05rem' }}>{goModText}</b>
               </div>
               <div style={{ background: '#fff', border: `1px solid ${theme.border}`, borderRadius: '0.85rem', padding: '0.9rem 1rem' }}>
                 <div style={{ fontSize: '0.75rem', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '0.5rem' }}>Обращений к ИИ</div>

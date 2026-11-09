@@ -135,6 +135,10 @@ func (deadlineScan) Scan(ctx context.Context, _ scan.Input) ([]task.ModuleResult
 		stats.Observe(12 * time.Millisecond)
 		stats.Observe(40 * time.Millisecond)
 	}
+	if p := scan.ProgressFrom(ctx); p != nil {
+		p.At("проверка достижимости", "example.com/pkg.Func", 2, 8)
+		p.SetGoMods(17)
+	}
 	return nil, context.DeadlineExceeded
 }
 
@@ -167,6 +171,9 @@ func TestDeadlineKeepsCloneAndAIStats(t *testing.T) {
 	}
 	if got.AICalls != 2 || got.AIMinMS == nil || *got.AIMinMS != 12 || got.AIMaxMS == nil || *got.AIMaxMS != 40 {
 		t.Fatalf("calls %d min %v max %v", got.AICalls, got.AIMinMS, got.AIMaxMS)
+	}
+	if got.GoModCount == nil || *got.GoModCount != 17 || !strings.Contains(got.StopStage, "Найдено go.mod: 17") || !strings.Contains(got.ErrorMsg, "проверка достижимости") {
+		t.Fatalf("mods %v stage %s err %s", got.GoModCount, got.StopStage, got.ErrorMsg)
 	}
 }
 

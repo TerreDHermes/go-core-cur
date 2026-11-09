@@ -157,6 +157,10 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 	if err := st.SaveAIMetrics(ctx, "run", task.AIMetrics{Calls: 4, MinMS: 10, MaxMS: 20}); err != nil {
 		t.Fatal(err)
 	}
+	n := 17
+	if err := st.SaveProgress(ctx, "run", &n, "Остановились на этапе «поиск go.mod». Найдено go.mod: 17."); err != nil {
+		t.Fatal(err)
+	}
 	ids, err := st.RequeueRunning(ctx, "2026-01-04T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +169,7 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 		t.Fatalf("%v", ids)
 	}
 	got, err := st.Get(ctx, "run")
-	if err != nil || got.Status != task.StatusPending || got.StartedAt != "" || got.CloneMS != nil || got.AICalls != 0 || got.AIMinMS != nil || got.AIMaxMS != nil {
+	if err != nil || got.Status != task.StatusPending || got.StartedAt != "" || got.CloneMS != nil || got.AICalls != 0 || got.AIMinMS != nil || got.AIMaxMS != nil || got.GoModCount != nil || got.StopStage != "" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	pending, err := st.ListPendingIDs(ctx)

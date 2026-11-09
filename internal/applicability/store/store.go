@@ -14,6 +14,7 @@ type Store interface {
 	Cancel(ctx context.Context, id, errMsg, updatedAt string) (bool, error)
 	SaveAIMetrics(ctx context.Context, id string, m task.AIMetrics) error
 	SaveCloneMS(ctx context.Context, id string, ms int64) error
+	SaveProgress(ctx context.Context, id string, goMods *int, stage string) error
 	SetModel(ctx context.Context, id, model string) error
 	RequeueRunning(ctx context.Context, updatedAt string) ([]string, error)
 	Get(ctx context.Context, id string) (task.Task, error)

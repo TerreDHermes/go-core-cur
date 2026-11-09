@@ -10,6 +10,7 @@ import (
 )
 
 func findGoMods(ctx context.Context, repoPath string) ([]string, error) {
+	note(ctx, "поиск go.mod")
 	var paths []string
 	err := filepath.WalkDir(repoPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -27,6 +28,9 @@ func findGoMods(ctx context.Context, repoPath string) ([]string, error) {
 				return relErr
 			}
 			paths = append(paths, filepath.ToSlash(rel))
+			if p := ProgressFrom(ctx); p != nil {
+				p.FoundGoMod()
+			}
 		}
 		return nil
 	})

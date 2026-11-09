@@ -40,6 +40,7 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 		return report
 	}
 	for i := range fns {
+		noteAt(ctx, "проверка достижимости", fns[i].Symbol, i+1, len(fns))
 		if ctx.Err() != nil {
 			fns[i].Status = "failed"
 			fns[i].Output = ctx.Err().Error()

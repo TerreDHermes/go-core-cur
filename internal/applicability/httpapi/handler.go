@@ -250,6 +250,8 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		AIMinMS:       t.AIMinMS,
 		AIMaxMS:       t.AIMaxMS,
 		CloneMS:       t.CloneMS,
+		GoModCount:    t.GoModCount,
+		StopStage:     t.StopStage,
 	})
 }
 
@@ -285,6 +287,8 @@ type taskResponse struct {
 	AIMinMS       *int64           `json:"ai_min_ms"`
 	AIMaxMS       *int64           `json:"ai_max_ms"`
 	CloneMS       *int64           `json:"clone_ms"`
+	GoModCount    *int             `json:"go_mod_count"`
+	StopStage     string           `json:"stop_stage"`
 }
 
 type moduleResponse struct {

@@ -43,6 +43,7 @@ type Explainer interface {
 // A reachable patch is not applicable only when every hunk is already present.
 // The deterministic text stays in Report.PreVerdict. Explain replaces Verdict and fills Narrative.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
+	note(ctx, "чтение заметок")
 	notes, err := loadDevNotes(in.RepoPath)
 	if err != nil {
 		return nil, err
@@ -54,17 +55,22 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 	if err != nil {
 		return nil, err
 	}
+	if p := ProgressFrom(ctx); p != nil {
+		p.SetGoMods(len(paths))
+	}
 	if len(paths) == 0 {
 		return scanNotGo(ctx, in, patches, explain, notes)
 	}
 	if patches == nil {
 		return nil, fmt.Errorf("cve patch source is not configured")
 	}
+	note(ctx, "загрузка патча")
 	patch, err := patches.Fetch(ctx, in.CVEID)
 	if err != nil {
 		return nil, fmt.Errorf("cve patch for: %w", err)
 	}
 
+	note(ctx, "чтение go.mod")
 	matched, err := modulesWithPackage(ctx, in, paths)
 	if err != nil {
 		return nil, err
@@ -77,10 +83,11 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 	}
 
 	var found []task.ModuleResult
-	for _, mod := range matched {
+	for i, mod := range matched {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		noteAt(ctx, "разбор модуля", mod.GoModPath, i+1, len(matched))
 		found = append(found, analyzeModule(ctx, in, patch, mod))
 	}
 	if hit, ok := rootHit(ctx, in.RepoPath, patch, false); ok {
@@ -90,9 +97,13 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 }
 
 func scanNotGo(ctx context.Context, in Input, patches PatchSource, explain Explainer, notes *task.DevNotes) ([]task.ModuleResult, error) {
+	if p := ProgressFrom(ctx); p != nil {
+		p.SetGoMods(0)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	note(ctx, "загрузка патча")
 	if patches == nil {
 		return nil, fmt.Errorf("cve patch source is not configured")
 	}
@@ -179,6 +190,7 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	note(ctx, "загрузка патча")
 	if patches == nil {
 		return nil, fmt.Errorf("cve patch source is not configured")
 	}
@@ -289,6 +301,7 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		noteAt(ctx, "вердикт модели", results[i].GoModPath, i+1, len(results))
 		results[i].ReportMD.PreVerdict = results[i].Verdict
 		text, err := explain.Explain(ctx, verdictPrompt(in, results[i].ReportMD))
 		if err != nil {
@@ -302,6 +315,7 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 		kind := decideApplicability(results[i].ReportMD, text)
 		results[i].Applicability = kind
 		results[i].ReportMD.Applicability = kind
+		noteAt(ctx, "журнал модели", results[i].GoModPath, i+1, len(results))
 		narrative, err := explain.Explain(ctx, narrativePrompt(in, results[i].ReportMD, text))
 		if err != nil {
 			return nil, fmt.Errorf("ai report for %s: %w", results[i].GoModPath, err)

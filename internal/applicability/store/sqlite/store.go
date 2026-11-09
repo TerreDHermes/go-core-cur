@@ -56,6 +56,8 @@ func ensureColumns(db *sql.DB) error {
 		`ALTER TABLE analysis_tasks ADD COLUMN ai_max_ms INTEGER`,
 		`ALTER TABLE analysis_tasks ADD COLUMN started_at TEXT`,
 		`ALTER TABLE analysis_tasks ADD COLUMN clone_ms INTEGER`,
+		`ALTER TABLE analysis_tasks ADD COLUMN go_mod_count INTEGER`,
+		`ALTER TABLE analysis_tasks ADD COLUMN stop_stage TEXT`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDupColumn(err) {
 			return fmt.Errorf("migrate: %w", err)
@@ -210,6 +212,27 @@ func (s *Store) SaveCloneMS(ctx context.Context, id string, ms int64) error {
 	return rowsOne(res, "save clone time")
 }
 
+// SaveProgress records how many go.mod files were seen and the sentence that
+// says where the analysis stopped. A nil count leaves the stored number as it is.
+func (s *Store) SaveProgress(ctx context.Context, id string, goMods *int, stage string) error {
+	var count any
+	if goMods != nil {
+		n := *goMods
+		if n < 0 {
+			n = 0
+		}
+		count = n
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE analysis_tasks
+		SET go_mod_count = COALESCE(?, go_mod_count), stop_stage = ?
+		WHERE id = ?`, count, stage, id)
+	if err != nil {
+		return fmt.Errorf("save progress: %w", err)
+	}
+	return rowsOne(res, "save progress")
+}
+
 // SetModel records the model that finished the analysis after a queue fallback.
 func (s *Store) SetModel(ctx context.Context, id, model string) error {
 	res, err := s.db.ExecContext(ctx, `
@@ -259,7 +282,8 @@ func (s *Store) RequeueRunning(ctx context.Context, updatedAt string) ([]string,
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE analysis_tasks
 		SET status = 'PENDING', updated_at = ?, started_at = NULL, clone_ms = NULL,
-		    ai_calls = 0, ai_min_ms = NULL, ai_max_ms = NULL
+		    ai_calls = 0, ai_min_ms = NULL, ai_max_ms = NULL,
+		    go_mod_count = NULL, stop_stage = NULL
 		WHERE status = 'RUNNING'`, updatedAt); err != nil {
 		return nil, fmt.Errorf("requeue running: %w", err)
 	}
@@ -274,7 +298,8 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       COALESCE(error_msg, ''), created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
-		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms,
+		       go_mod_count, COALESCE(stop_stage, '')
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -311,7 +336,8 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       '', created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
-		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms,
+		       go_mod_count, COALESCE(stop_stage, '')
 		FROM analysis_tasks`
 	var args []any
 	if status != "" {
@@ -383,12 +409,12 @@ func scanTask(row scanner) (task.Task, error) {
 	var t task.Task
 	var status string
 	var calls int
-	var minMS, maxMS, cloneMS sql.NullInt64
+	var minMS, maxMS, cloneMS, goMods sql.NullInt64
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
 		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt, &t.StartedAt,
 		&t.Applicability, &t.Model,
-		&calls, &minMS, &maxMS, &cloneMS,
+		&calls, &minMS, &maxMS, &cloneMS, &goMods, &t.StopStage,
 	)
 	if err != nil {
 		return task.Task{}, err
@@ -406,6 +432,10 @@ func scanTask(row scanner) (task.Task, error) {
 	if cloneMS.Valid {
 		v := cloneMS.Int64
 		t.CloneMS = &v
+	}
+	if goMods.Valid {
+		v := int(goMods.Int64)
+		t.GoModCount = &v
 	}
 	return t, nil
 }

@@ -49,6 +49,7 @@ func descriptionGrep(ctx context.Context, repoPath string, patch task.CVEPatch, 
 	if explain == nil {
 		return nil, fmt.Errorf("ai client is not configured")
 	}
+	note(ctx, "фразы для поиска")
 	text, err := explain.Explain(ctx, keywordPrompt(patch))
 	if err != nil {
 		return nil, fmt.Errorf("ai grep phrases: %w", err)
@@ -100,6 +101,7 @@ func withGrep(ctx context.Context, repoPath string, in Input, patch task.CVEPatc
 }
 
 func grepRepo(ctx context.Context, repoPath string, patterns []string) ([]task.GrepHit, []task.GrepExcerpt, bool, bool, error) {
+	note(ctx, "поиск по дереву")
 	hits := []task.GrepHit{}
 	excerpts := []task.GrepExcerpt{}
 	if len(patterns) == 0 {

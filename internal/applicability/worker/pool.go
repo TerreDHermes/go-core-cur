@@ -156,12 +156,14 @@ func (p *Pool) handle(id string) {
 
 	t, err := p.store.Get(context.Background(), id)
 	if err != nil {
-		p.finish(id, nil, stats, err)
+		p.finish(id, nil, stats, nil, err)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	ctx = ai.WithCallStats(ctx, stats)
+	prog := scan.NewProgress()
+	ctx = scan.WithProgress(ctx, prog)
 	p.cancels.Store(id, cancel)
 	defer func() {
 		cancel()
@@ -175,6 +177,7 @@ func (p *Pool) handle(id string) {
 		select {
 		case <-ctx.Done():
 			p.persistAI(id, stats)
+			p.persistProgress(id, prog, true)
 		case <-stopStats:
 		}
 	}()
@@ -187,7 +190,7 @@ func (p *Pool) handle(id string) {
 		defer p.clone.Remove(dir)
 	}
 	if err != nil {
-		p.finish(id, nil, stats, err)
+		p.finish(id, nil, stats, prog, err)
 		return
 	}
 
@@ -208,7 +211,7 @@ func (p *Pool) handle(id string) {
 			}
 		}
 	}
-	p.finish(id, modules, stats, err)
+	p.finish(id, modules, stats, prog, err)
 }
 
 func switchedModel(modules []task.ModuleResult) string {
@@ -220,12 +223,22 @@ func switchedModel(modules []task.ModuleResult) string {
 	return ""
 }
 
-func (p *Pool) finish(id string, modules []task.ModuleResult, stats *ai.CallStats, err error) {
+func (p *Pool) finish(id string, modules []task.ModuleResult, stats *ai.CallStats, prog *scan.Progress, err error) {
 	p.persistAI(id, stats)
 	if err != nil {
+		if prog != nil {
+			if line := prog.Line(); line != "" && !strings.Contains(err.Error(), line) {
+				err = fmt.Errorf("%s %w", line, err)
+			}
+		}
+		p.persistProgress(id, prog, true)
 		p.fail(id, err)
 		return
 	}
+	if prog != nil {
+		prog.Stage("")
+	}
+	p.persistProgress(id, prog, false)
 	if err := p.store.Complete(context.Background(), id, modules, p.stamp()); err != nil {
 		if errors.Is(err, task.ErrNotFound) {
 			p.log.Info("task already finished", "task_id", id)
@@ -249,6 +262,24 @@ func (p *Pool) persistAI(id string, stats *ai.CallStats) {
 	}
 	if err := p.store.SaveAIMetrics(context.Background(), id, m); err != nil {
 		p.log.Error("save ai metrics", "task_id", id, "err", err)
+	}
+}
+
+func (p *Pool) persistProgress(id string, prog *scan.Progress, stopped bool) {
+	if prog == nil {
+		return
+	}
+	n, known := prog.GoMods()
+	var count *int
+	if known {
+		count = &n
+	}
+	stage := ""
+	if stopped {
+		stage = prog.Line()
+	}
+	if err := p.store.SaveProgress(context.Background(), id, count, stage); err != nil {
+		p.log.Error("save progress", "task_id", id, "err", err)
 	}
 }
 

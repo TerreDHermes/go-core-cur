@@ -42,6 +42,8 @@ type Task struct {
 	AIMinMS       *int64
 	AIMaxMS       *int64
 	CloneMS       *int64
+	GoModCount    *int
+	StopStage     string
 }
 
 // ModuleResult is the outcome for one go.mod that lists PackageName.
