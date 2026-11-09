@@ -101,7 +101,7 @@ type ReachReport struct {
 	Functions []ReachFunc `json:"functions"`
 }
 
-// ReachFunc is one function taken from the patch and checked with deadcode -whylive.
+// ReachFunc is one function taken from the patch and checked against one deadcode run for its module.
 type ReachFunc struct {
 	Symbol string `json:"symbol"`
 	File   string `json:"file"`

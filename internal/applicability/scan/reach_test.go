@@ -2,9 +2,12 @@ package scan
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"cve-patch-viewer/internal/applicability/task"
 )
@@ -28,37 +31,79 @@ func TestFunctionsInPatch(t *testing.T) {
 	}
 }
 
-func TestClassifyWhyLive(t *testing.T) {
-	if classifyWhyLive(nil, "example.com/app.main\n  static@L0006 --> example.com/app/pkg.HostID\n") != "live" {
-		t.Fatal("live")
+func TestParseDeadcodeListsUnreachableSymbols(t *testing.T) {
+	raw := `[
+		{"Name":"jose","Path":"github.com/go-jose/go-jose/v4","Funcs":[
+			{"Name":"rawJSONWebSignature.sanitized","Position":{"File":"jws.go","Line":10,"Col":6},"Generated":false}
+		]},
+		{"Name":"resource","Path":"go.opentelemetry.io/otel/sdk/resource","Funcs":[
+			{"Name":"HostID","Position":{"File":"host_id.go","Line":4,"Col":6},"Generated":false}
+		]}
+	]`
+	dead, err := parseDeadcode(raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if classifyWhyLive(assertErr{}, "deadcode: function example.com/app/pkg.DeadHelper is dead code\n") != "dead" {
-		t.Fatal("dead")
+	if _, ok := dead["github.com/go-jose/go-jose/v4.rawJSONWebSignature.sanitized"]; !ok {
+		t.Fatal(dead)
 	}
-	if classifyWhyLive(assertErr{}, "deadcode: function \"missing\" not found in program\n") != "missing" {
-		t.Fatal("missing")
+	if _, ok := dead["go.opentelemetry.io/otel/sdk/resource.HostID"]; !ok {
+		t.Fatal(dead)
 	}
-	if classifyWhyLive(assertErr{}, "deadcode: no main packages\n") != "no-main" {
-		t.Fatal("no main")
+	empty, err := parseDeadcode("null")
+	if err != nil || len(empty) != 0 {
+		t.Fatal(err, empty)
 	}
-	if classifyWhyLive(assertErr{}, "go: cannot find module\n") != "failed" {
-		t.Fatal("failed")
+	if _, err := parseDeadcode(""); err == nil {
+		t.Fatal("empty output")
 	}
 }
 
-type assertErr struct{}
+func TestClassifyModuleSymbol(t *testing.T) {
+	dead := map[string]struct{}{"example.com/app/pkg.DeadHelper": {}}
+	if status, _ := classifyModuleSymbol(moduleDeadcode{Status: "ok", Dead: dead}, "example.com/app/pkg.DeadHelper"); status != "dead" {
+		t.Fatal(status)
+	}
+	if status, _ := classifyModuleSymbol(moduleDeadcode{Status: "ok", Dead: dead}, "example.com/app/pkg.HostID"); status != "live" {
+		t.Fatal(status)
+	}
+	if status, _ := classifyModuleSymbol(moduleDeadcode{Status: "no-main", Output: "deadcode: no main packages"}, "example.com/app/pkg.HostID"); status != "no-main" {
+		t.Fatal(status)
+	}
+	if status, out := classifyModuleSymbol(moduleDeadcode{Status: "failed", Output: deadcodeTimeoutOutput()}, "example.com/app/pkg.HostID"); status != "failed" || !strings.Contains(out, "4 минуты") {
+		t.Fatal(status, out)
+	}
+}
 
-func (assertErr) Error() string { return "exit" }
+func TestMemLimitUsesThreeQuarters(t *testing.T) {
+	got, ok := memLimitValue("16384")
+	if ok {
+		t.Fatal(got)
+	}
+	got, ok = memLimitValue("max")
+	if ok {
+		t.Fatal(got)
+	}
+	got, ok = memLimitValue("17179869184")
+	if !ok || got != strconv.FormatUint(17179869184*3/4, 10) {
+		t.Fatal(got, ok)
+	}
+	if deadcodeLimit != 4*time.Minute {
+		t.Fatal(deadcodeLimit)
+	}
+	if !strings.Contains(strings.Join(deadcodeArgs(), " "), "-filter=") || !strings.Contains(strings.Join(deadcodeArgs(), " "), "-json") {
+		t.Fatal(deadcodeArgs())
+	}
+}
 
 func TestReachableFalseWhenFunctionIsDead(t *testing.T) {
-	restore := stubWhyLive(t, func(_ context.Context, dir string, vendor bool, symbol string) (string, string, error) {
+	restore := stubModuleDeadcode(t, func(_ context.Context, dir string, vendor bool) moduleDeadcode {
 		if !vendor || dir == "" {
 			t.Fatalf("dir %s vendor %v", dir, vendor)
 		}
-		if symbol != "go.opentelemetry.io/otel/sdk/resource.HostID" {
-			t.Fatalf("symbol %s", symbol)
-		}
-		return "dead", "deadcode: function go.opentelemetry.io/otel/sdk/resource.HostID is dead code", nil
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{
+			"go.opentelemetry.io/otel/sdk/resource.HostID": {},
+		}}
 	})
 	defer restore()
 
@@ -94,8 +139,8 @@ func TestReachableFalseWhenFunctionIsDead(t *testing.T) {
 }
 
 func TestReachableTrueWhenDeadcodeShowsPath(t *testing.T) {
-	restore := stubWhyLive(t, func(context.Context, string, bool, string) (string, string, error) {
-		return "live", "example.com/alertmanager/cmd/alertmanager.main\n  static@L0008 --> go.opentelemetry.io/otel/sdk/resource.HostID\n", nil
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{}}
 	})
 	defer restore()
 
@@ -127,8 +172,8 @@ func TestReachableTrueWhenDeadcodeShowsPath(t *testing.T) {
 }
 
 func TestDeadcodeFailureDoesNotMeanUnreachable(t *testing.T) {
-	restore := stubWhyLive(t, func(context.Context, string, bool, string) (string, string, error) {
-		return "failed", "go: build constraints exclude all Go files", nil
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "failed", Output: "go: build constraints exclude all Go files"}
 	})
 	defer restore()
 
@@ -166,9 +211,96 @@ func (hostPatch) Fetch(context.Context, string) (task.CVEPatch, error) {
 	}, nil
 }
 
-func stubWhyLive(t *testing.T, fn func(context.Context, string, bool, string) (string, string, error)) func() {
+func TestOneDeadcodeRunCoversEverySymbol(t *testing.T) {
+	calls := 0
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		calls++
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{
+			"go.opentelemetry.io/otel/sdk/resource.HostID": {},
+		}}
+	})
+	defer restore()
+
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/alertmanager\n")
+	rel := "vendor/go.opentelemetry.io/otel/sdk/resource/host_id.go"
+	mustWrite(t, filepath.Join(root, rel), "package resource\n\nfunc HostID() string { return \"\" }\nfunc readMachineID() string { return \"\" }\n")
+	diff := "@@ func HostID() string {\n+func readMachineID() string {\n"
+	report := analyzeReach(context.Background(), root, []task.PatchFile{{
+		Filename: "sdk/resource/host_id.go",
+		Patch:    diff,
+	}}, []task.PatchFileMatch{{
+		Filename: "sdk/resource/host_id.go",
+		Found:    true,
+		Path:     rel,
+	}})
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+	if report.Reachable == nil || !*report.Reachable {
+		t.Fatalf("%+v", report)
+	}
+	if len(report.Functions) != 2 || report.Functions[0].Status != "dead" || report.Functions[1].Status != "live" {
+		t.Fatalf("%+v", report.Functions)
+	}
+}
+
+func TestTimeoutDetailStaysUnknown(t *testing.T) {
+	detail := unknownDetail([]task.ReachFunc{{
+		Status: "failed",
+		Output: deadcodeTimeoutOutput(),
+	}})
+	if !strings.Contains(detail, "4 минуты") || !strings.Contains(detail, "не проверена") {
+		t.Fatal(detail)
+	}
+	reachable, _ := summarizeReach([]task.ReachFunc{{Status: "failed", Output: deadcodeTimeoutOutput()}})
+	if reachable != nil {
+		t.Fatal(reachable)
+	}
+}
+
+func TestRunGroupedKillsGrandchild(t *testing.T) {
+	if _, err := os.Stat("/bin/bash"); err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	childFile := filepath.Join(dir, "child")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		script := "sleep 30 & echo $! > " + strconv.Quote(childFile) + "; wait"
+		_, _, _ = runGrouped(ctx, dir, os.Environ(), "bash", "-c", script)
+	}()
+	var pid string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body, err := os.ReadFile(childFile)
+		if err == nil && strings.TrimSpace(string(body)) != "" {
+			pid = strings.TrimSpace(string(body))
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == "" {
+		cancel()
+		<-done
+		t.Fatal("child pid was not written")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("grouped command did not return")
+	}
+	if _, err := os.Stat("/proc/" + pid); err == nil {
+		t.Fatalf("child %s still alive", pid)
+	}
+}
+
+func stubModuleDeadcode(t *testing.T, fn func(context.Context, string, bool) moduleDeadcode) func() {
 	t.Helper()
-	prev := whyLiveFunc
-	whyLiveFunc = fn
-	return func() { whyLiveFunc = prev }
+	prev := runModuleDeadcode
+	runModuleDeadcode = fn
+	return func() { runModuleDeadcode = prev }
 }

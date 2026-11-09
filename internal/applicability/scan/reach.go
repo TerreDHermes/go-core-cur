@@ -39,13 +39,9 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 		report.Detail = "из патча не удалось выделить функцию"
 		return report
 	}
+	groups := map[string][]int{}
+	var order []string
 	for i := range fns {
-		noteAt(ctx, "проверка достижимости", fns[i].Symbol, i+1, len(fns))
-		if ctx.Err() != nil {
-			fns[i].Status = "failed"
-			fns[i].Output = ctx.Err().Error()
-			continue
-		}
 		if fns[i].Symbol == "" {
 			fns[i].Status = "failed"
 			fns[i].Output = "не удалось собрать путь импорта"
@@ -57,11 +53,28 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 			fns[i].Output = "не найден go.mod для файла"
 			continue
 		}
-		status, output, err := whyLiveFunc(ctx, dir, hasVendorDir(dir), fns[i].Symbol)
-		fns[i].Status = status
-		fns[i].Output = strings.TrimSpace(output)
-		if err != nil && fns[i].Output == "" {
-			fns[i].Output = err.Error()
+		if _, seen := groups[dir]; !seen {
+			order = append(order, dir)
+		}
+		groups[dir] = append(groups[dir], i)
+	}
+	for mi, dir := range order {
+		detail := modulePath(filepath.Join(dir, "go.mod"))
+		if detail == "" {
+			detail = dir
+		}
+		noteAt(ctx, "проверка достижимости", detail, mi+1, len(order))
+		idxs := groups[dir]
+		if ctx.Err() != nil {
+			for _, i := range idxs {
+				fns[i].Status = "failed"
+				fns[i].Output = ctx.Err().Error()
+			}
+			continue
+		}
+		res := runModuleDeadcode(ctx, dir, hasVendorDir(dir))
+		for _, i := range idxs {
+			fns[i].Status, fns[i].Output = classifyModuleSymbol(res, fns[i].Symbol)
 		}
 	}
 	report.Functions = fns
@@ -100,14 +113,14 @@ func summarizeReach(fns []task.ReachFunc) (*bool, string) {
 	}
 	if anyLive {
 		v := true
-		return &v, "deadcode нашёл путь от main до уязвимой функции: код достижим"
+		return &v, "deadcode не нашёл функцию среди недостижимого кода: код достижим"
 	}
 	if anyUnknown {
 		return nil, unknownDetail(fns)
 	}
 	if anyNeg {
 		v := false
-		return &v, "deadcode не нашёл пути от main до уязвимой функции: уязвимый код недостижим, уязвимости в этой сборке нет"
+		return &v, "deadcode нашёл функцию среди недостижимого кода: уязвимый код недостижим, уязвимости в этой сборке нет"
 	}
 	return nil, "досягаемость от main не проверена"
 }
@@ -121,6 +134,11 @@ func unknownDetail(fns []task.ReachFunc) string {
 	for _, fn := range fns {
 		if fn.Status == "failed" && strings.Contains(fn.Output, "не найден в PATH") {
 			return "бинарник deadcode не найден в PATH, досягаемость не проверена"
+		}
+	}
+	for _, fn := range fns {
+		if fn.Status == "failed" && strings.Contains(fn.Output, "не уложился") {
+			return trimOneLine(fn.Output) + ", досягаемость не проверена"
 		}
 	}
 	for _, fn := range fns {
