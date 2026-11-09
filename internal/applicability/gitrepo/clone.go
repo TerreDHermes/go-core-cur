@@ -15,7 +15,7 @@ import (
 // token is the HTTPS password from GIT_TOKEN. An SSH URL is cloned over HTTPS so the
 // same token is used. An empty token clones the URL as given, without credentials.
 func Clone(ctx context.Context, rawURL, branch, token string) (string, error) {
-	remote, err := cloneURL(rawURL, token)
+	remote, user, err := cloneURL(rawURL, token)
 	if err != nil {
 		return "", err
 	}
@@ -27,7 +27,7 @@ func Clone(ctx context.Context, rawURL, branch, token string) (string, error) {
 		return "", fmt.Errorf("mkdir temp: %w", err)
 	}
 
-	clone := command(ctx, token, cloneCommandArgs(remote, branch, dir)...)
+	clone := command(ctx, token, user, cloneCommandArgs(remote, branch, dir)...)
 	if out, err := clone.CombinedOutput(); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("git clone: %w: %s", err, trim(out, token))
@@ -36,56 +36,114 @@ func Clone(ctx context.Context, rawURL, branch, token string) (string, error) {
 }
 
 // cloneCommandArgs fetches one branch tip. Full history and the other branches stay on the remote.
+// The "--" keeps a branch name that contains a slash from being read as the repository path.
 func cloneCommandArgs(remote, branch, dir string) []string {
-	return []string{"git", "clone", "--quiet", "--single-branch", "--depth", "1", "--branch", branch, remote, dir}
+	return []string{"git", "clone", "--quiet", "--single-branch", "--depth", "1", "--branch", branch, "--", remote, dir}
 }
 
-// cloneURL turns git@host:path and ssh://git@host/path into https://host/path when a
-// token is set. Git sends that token only to HTTPS. Without a token the URL is unchanged.
-func cloneURL(raw, token string) (string, error) {
+// cloneURL returns the https address git should fetch and the username for the token.
+// The address is always https://host/group/project.git: the .git suffix is what
+// GitHub, GitLab and Gitea serve as the repository, and a page without it is not.
+// user is oauth2 everywhere except GitHub, where the username is x-access-token.
+// An empty token leaves an ssh address unchanged and returns an empty user.
+func cloneURL(raw, token string) (remote, user string, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", fmt.Errorf("repository url is empty")
+		return "", "", fmt.Errorf("repository url is empty")
+	}
+	// Without a token an ssh address is used as written: there is no https password to send.
+	if token == "" && (strings.HasPrefix(raw, "git@") || strings.HasPrefix(strings.ToLower(raw), "ssh:")) {
+		return raw, "", nil
+	}
+	parsed, err := parseRemote(raw)
+	if err != nil {
+		return "", "", err
+	}
+	if token != "" || parsed.Scheme == "ssh" {
+		parsed.Scheme = "https"
+		user = credentialUser(parsed.Host)
+	}
+	parsed.User = nil
+	parsed.Path = repositoryPath(parsed.Path)
+	if parsed.Path == "" || parsed.Path == ".git" || parsed.Path == "/.git" {
+		return "", "", fmt.Errorf("invalid repository url")
 	}
 	if token == "" {
-		return raw, nil
+		user = ""
 	}
+	return parsed.String(), user, nil
+}
+
+func parseRemote(raw string) (*url.URL, error) {
 	if host, path, ok := strings.Cut(strings.TrimPrefix(raw, "git@"), ":"); ok && strings.HasPrefix(raw, "git@") && host != "" && path != "" {
-		return "https://" + host + "/" + strings.TrimPrefix(path, "/"), nil
+		return &url.URL{Scheme: "https", Host: host, Path: "/" + strings.TrimPrefix(path, "/")}, nil
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" {
-		return "", fmt.Errorf("invalid repository url")
+		return nil, fmt.Errorf("invalid repository url")
 	}
 	switch parsed.Scheme {
 	case "https", "http", "ssh":
-		parsed.Scheme = "https"
-		parsed.User = nil
-		return parsed.String(), nil
+		return parsed, nil
 	default:
-		return "", fmt.Errorf("unsupported repository url")
+		return nil, fmt.Errorf("unsupported repository url")
 	}
 }
 
-func command(ctx context.Context, token string, args ...string) *exec.Cmd {
+// repositoryPath is the project path with a single .git suffix and no trailing slash.
+func repositoryPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		return ""
+	}
+	if !strings.HasSuffix(strings.ToLower(path), ".git") {
+		path += ".git"
+	}
+	return path
+}
+
+// credentialUser is the username git sends with the token.
+// GitHub expects x-access-token. GitLab, Gitea and the rest take oauth2;
+// the token itself is always the password.
+func credentialUser(host string) string {
+	host = strings.ToLower(host)
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+		return "x-access-token"
+	}
+	return "oauth2"
+}
+
+func command(ctx context.Context, token, user string, args ...string) *exec.Cmd {
 	if token != "" {
-		args = withCredentials(args)
+		args = withCredentials(args, user)
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = gitEnv(token)
 	return cmd
 }
 
-func withCredentials(args []string) []string {
+func withCredentials(args []string, user string) []string {
 	if len(args) == 0 || args[0] != "git" {
 		return args
 	}
+	if user == "" {
+		user = "oauth2"
+	}
 	// Drop inherited helpers. The child reads the password from GIT_TOKEN, so the
 	// token value stays out of the process arguments and the remote URL.
+	// %s is the shell printf verb; the username is the only part we fill in here.
+	helper := fmt.Sprintf(
+		`credential.helper=!f() { printf 'username=%s\npassword=%%s\n' "$GIT_TOKEN"; }; f`,
+		user,
+	)
 	out := []string{
 		"git",
 		"-c", "credential.helper=",
-		"-c", `credential.helper=!f() { printf 'username=x-access-token\npassword=%s\n' "$GIT_TOKEN"; }; f`,
+		"-c", helper,
 	}
 	return append(out, args[1:]...)
 }

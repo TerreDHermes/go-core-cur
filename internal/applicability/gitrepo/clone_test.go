@@ -6,11 +6,14 @@ import (
 )
 
 func TestCloneArgsKeepTokenOutOfArgv(t *testing.T) {
-	remote, err := cloneURL("git@github.com:TerreDHermes/go-core-cur.git", "secret-token")
+	remote, user, err := cloneURL("git@github.com:TerreDHermes/go-core-cur.git", "secret-token")
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := withCredentials(cloneCommandArgs(remote, "main", "/tmp/repo"))
+	if user != "x-access-token" {
+		t.Fatal(user)
+	}
+	args := withCredentials(cloneCommandArgs(remote, "main", "/tmp/repo"), user)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "secret-token") {
 		t.Fatalf("token leaked into args: %s", joined)
@@ -18,7 +21,7 @@ func TestCloneArgsKeepTokenOutOfArgv(t *testing.T) {
 	if !strings.Contains(joined, "https://github.com/TerreDHermes/go-core-cur.git") {
 		t.Fatalf("args: %s", joined)
 	}
-	if !strings.Contains(joined, "credential.helper=") || !strings.Contains(joined, "$GIT_TOKEN") {
+	if !strings.Contains(joined, "credential.helper=") || !strings.Contains(joined, "$GIT_TOKEN") || !strings.Contains(joined, "username=x-access-token") {
 		t.Fatalf("args: %s", joined)
 	}
 	if !strings.Contains(joined, "--single-branch") || !strings.Contains(joined, "--depth 1") || !strings.Contains(joined, "--branch main") {
@@ -30,35 +33,65 @@ func TestCloneArgsKeepTokenOutOfArgv(t *testing.T) {
 }
 
 func TestCloneURLUsesTokenForHTTPSAndSSH(t *testing.T) {
-	https, err := cloneURL("https://github.com/TerreDHermes/go-core-cur.git", "secret-token")
+	https, user, err := cloneURL("https://github.com/TerreDHermes/go-core-cur.git", "secret-token")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ssh, err := cloneURL("git@github.com:TerreDHermes/go-core-cur.git", "secret-token")
+	ssh, sshUser, err := cloneURL("git@github.com:TerreDHermes/go-core-cur.git", "secret-token")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshURL, err := cloneURL("ssh://git@github.com/TerreDHermes/go-core-cur.git", "secret-token")
+	sshURL, _, err := cloneURL("ssh://git@github.com/TerreDHermes/go-core-cur.git", "secret-token")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "https://github.com/TerreDHermes/go-core-cur.git"
-	if https != want || ssh != want || sshURL != want {
-		t.Fatalf("https %s ssh %s sshURL %s", https, ssh, sshURL)
+	if https != want || ssh != want || sshURL != want || user != "x-access-token" || sshUser != "x-access-token" {
+		t.Fatalf("https %s ssh %s sshURL %s user %s", https, ssh, sshURL, user)
 	}
-	plain, err := cloneURL("git@github.com:TerreDHermes/go-core-cur.git", "")
+	plain, plainUser, err := cloneURL("git@github.com:TerreDHermes/go-core-cur.git", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain != "git@github.com:TerreDHermes/go-core-cur.git" {
-		t.Fatal(plain)
+	if plain != "git@github.com:TerreDHermes/go-core-cur.git" || plainUser != "" {
+		t.Fatal(plain, plainUser)
 	}
-	withUser, err := cloneURL("https://someone@github.com/TerreDHermes/go-core-cur.git", "secret-token")
+	withUser, _, err := cloneURL("https://someone@github.com/TerreDHermes/go-core-cur.git", "secret-token")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if withUser != want {
 		t.Fatal(withUser)
+	}
+}
+
+func TestCloneURLNormalizesGitLabPathAndUser(t *testing.T) {
+	cases := []string{
+		"https://git.slo/dapp/dapp-cilium",
+		"https://git.slo/dapp/dapp-cilium/",
+		"https://git.slo/dapp/dapp-cilium.git",
+		"git@git.slo:dapp/dapp-cilium.git",
+		"ssh://git@git.slo/dapp/dapp-cilium",
+	}
+	for _, raw := range cases {
+		remote, user, err := cloneURL(raw, "secret-token")
+		if err != nil {
+			t.Fatal(raw, err)
+		}
+		if remote != "https://git.slo/dapp/dapp-cilium.git" || user != "oauth2" {
+			t.Fatalf("%s -> %s user %s", raw, remote, user)
+		}
+		if strings.Contains(remote, "secret-token") {
+			t.Fatal(remote)
+		}
+	}
+	args := withCredentials(cloneCommandArgs("https://git.slo/dapp/dapp-cilium.git", "release/k8sc-6.0.0", "/tmp/repo"), "oauth2")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "username=oauth2") || !strings.Contains(joined, "--branch release/k8sc-6.0.0") {
+		t.Fatal(joined)
+	}
+	if !strings.Contains(joined, "-- https://git.slo/dapp/dapp-cilium.git") {
+		t.Fatal(joined)
 	}
 }
 
