@@ -308,6 +308,7 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 			return nil, fmt.Errorf("ai verdict for %s: %w", results[i].GoModPath, err)
 		}
 		text = ensureVerdictLead(verdictLead(in, results[i].ReportMD), text)
+		text = withPartialPatchNote(text, results[i].ReportMD)
 		if text == "" {
 			return nil, fmt.Errorf("ai verdict for %s is empty", results[i].GoModPath)
 		}

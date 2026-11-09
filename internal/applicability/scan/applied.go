@@ -44,6 +44,14 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 			Files:   markdownFileLines(files),
 		}
 	}
+	if !hasCheckedFile(files) {
+		return &task.PatchCheck{
+			Ran:     false,
+			Outcome: task.PatchCheckNotRun,
+			Detail:  "Проверка не проводилась: патч меняет только тестовые файлы или markdown. Файлы _test.go в сверке не учитываются и не доказывают, что уязвимость закрыта. На вывод это не повлияло.",
+			Files:   ignoredPatchLines(files),
+		}
+	}
 	if len(report.PatchFiles) == 0 {
 		return &task.PatchCheck{
 			Ran:     false,
@@ -74,31 +82,49 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	}
 
 	var lines []string
+	var notApplied []string
 	allFull := true
+	anyFull := false
 	anyPartial := false
 	ignoredMD := false
+	ignoredTest := false
 	for _, file := range files {
 		if isMarkdown(file.Filename) {
 			ignoredMD = true
 			lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
 			continue
 		}
+		if isTestGo(file.Filename) {
+			ignoredTest = true
+			lines = append(lines, "файл "+file.Filename+": тест, в сверке не учитывается")
+			continue
+		}
 		status, line := assessPatchFile(repoPath, file, report.PatchFiles)
 		lines = append(lines, line)
 		switch status {
 		case "full":
+			anyFull = true
 		case "partial", "missing":
 			allFull = false
 			anyPartial = true
+			notApplied = append(notApplied, file.Filename)
 		default:
 			allFull = false
+			notApplied = append(notApplied, file.Filename)
 		}
 	}
 	switch {
 	case allFull:
 		detail := "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде. Вывод — неприменима."
-		if ignoredMD {
-			detail = "Проверка проводилась. Патч применён целиком: все файлы кода и все фрагменты diff уже есть в коде. Файлы markdown в сверке не учитывались. Вывод — неприменима."
+		if ignoredMD || ignoredTest {
+			detail = "Проверка проводилась. Патч применён целиком: все файлы кода и все фрагменты diff уже есть в коде."
+			if ignoredMD {
+				detail += " Файлы markdown в сверке не учитывались."
+			}
+			if ignoredTest {
+				detail += " Тестовые файлы в сверке не учитывались."
+			}
+			detail += " Вывод — неприменима."
 		}
 		return &task.PatchCheck{
 			Ran:     true,
@@ -107,12 +133,16 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 			Files:   lines,
 		}
 	case anyPartial:
-		return &task.PatchCheck{
+		check := &task.PatchCheck{
 			Ran:     true,
 			Outcome: task.PatchCheckPartial,
 			Detail:  "Проверка проводилась. Патч применён не целиком. Вывод остаётся «применима»: для неприменимости нужно совпадение на 100 процентов.",
 			Files:   lines,
 		}
+		if anyFull {
+			check.NotApplied = notApplied
+		}
+		return check
 	default:
 		return &task.PatchCheck{
 			Ran:     true,
@@ -158,10 +188,31 @@ func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchF
 	return "partial", fmt.Sprintf("файл %s: совпали %d из %d фрагментов", file.Filename, matched, len(hunks))
 }
 
+// withPartialPatchNote appends the fixed sentence when some code files
+// already contain the patch and some do not. The model does not write it.
+func withPartialPatchNote(verdict string, report task.Report) string {
+	if report.PatchCheck == nil || len(report.PatchCheck.NotApplied) == 0 {
+		return verdict
+	}
+	note := "Патч частично применен, но в этих файлах патч не применен - " + strings.Join(report.PatchCheck.NotApplied, ", ") + "."
+	verdict = strings.TrimSpace(verdict)
+	if verdict == "" {
+		return note
+	}
+	if strings.HasSuffix(verdict, note) {
+		return verdict
+	}
+	last := verdict[len(verdict)-1]
+	if last == '.' || last == '!' || last == '?' || strings.HasSuffix(verdict, "…") {
+		return verdict + " " + note
+	}
+	return verdict + ". " + note
+}
+
 func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) bool {
 	sawCode := false
 	for _, file := range files {
-		if isMarkdown(file.Filename) {
+		if isMarkdown(file.Filename) || isTestGo(file.Filename) {
 			continue
 		}
 		sawCode = true
@@ -175,6 +226,19 @@ func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.P
 
 func isMarkdown(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".md")
+}
+
+func isTestGo(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), "_test.go")
+}
+
+func hasCheckedFile(files []task.PatchFile) bool {
+	for _, file := range files {
+		if !isMarkdown(file.Filename) && !isTestGo(file.Filename) {
+			return true
+		}
+	}
+	return false
 }
 
 func onlyMarkdown(files []task.PatchFile) bool {
@@ -192,6 +256,18 @@ func onlyMarkdown(files []task.PatchFile) bool {
 func markdownFileLines(files []task.PatchFile) []string {
 	lines := make([]string, 0, len(files))
 	for _, file := range files {
+		lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
+	}
+	return lines
+}
+
+func ignoredPatchLines(files []task.PatchFile) []string {
+	lines := make([]string, 0, len(files))
+	for _, file := range files {
+		if isTestGo(file.Filename) {
+			lines = append(lines, "файл "+file.Filename+": тест, в сверке не учитывается")
+			continue
+		}
 		lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
 	}
 	return lines

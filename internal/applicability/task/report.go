@@ -70,6 +70,10 @@ type PatchCheck struct {
 	Outcome string   `json:"outcome"`
 	Detail  string   `json:"detail"`
 	Files   []string `json:"files,omitempty"`
+	// NotApplied lists code files where the diff is not fully present.
+	// It is set only when at least one other code file already matches,
+	// so the verdict can name the gap. Test files are never included.
+	NotApplied []string `json:"not_applied,omitempty"`
 }
 
 // Section is the journal item for this check. It states whether the step ran,
