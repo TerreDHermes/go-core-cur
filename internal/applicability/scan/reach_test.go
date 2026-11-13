@@ -85,11 +85,11 @@ func TestMemLimitUsesThreeQuarters(t *testing.T) {
 		t.Fatal(got)
 	}
 	got, ok = memLimitValue("17179869184")
-	if !ok || got != strconv.FormatUint(17179869184*3/4, 10) {
+	if !ok || got != strconv.FormatUint(17179869184*3/4/uint64(deadcodeSlots), 10) {
 		t.Fatal(got, ok)
 	}
-	if deadcodeLimit != 4*time.Minute {
-		t.Fatal(deadcodeLimit)
+	if deadcodeLimit != 4*time.Minute || deadcodeSlots != 2 {
+		t.Fatal(deadcodeLimit, deadcodeSlots)
 	}
 	if !strings.Contains(strings.Join(deadcodeArgs(), " "), "-filter=") || !strings.Contains(strings.Join(deadcodeArgs(), " "), "-json") {
 		t.Fatal(deadcodeArgs())
@@ -296,6 +296,84 @@ func TestRunGroupedKillsGrandchild(t *testing.T) {
 	if _, err := os.Stat("/proc/" + pid); err == nil {
 		t.Fatalf("child %s still alive", pid)
 	}
+}
+
+func TestDeadcodeGateHoldsTheThird(t *testing.T) {
+	held := holdDeadcodeSlots(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if err := acquireDeadcode(ctx); err == nil {
+		t.Fatal("third run took a slot")
+	}
+	releaseDeadcode()
+	*held--
+	if err := acquireDeadcode(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	releaseDeadcode()
+}
+
+func TestDeadcodeGateCancelDoesNotTakeASlot(t *testing.T) {
+	holdDeadcodeSlots(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := acquireDeadcode(ctx); err == nil {
+		t.Fatal("cancelled task took a slot")
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if err := acquireDeadcode(ctx); err == nil {
+		t.Fatal("cancel freed a slot")
+	}
+}
+
+func TestDeadcodeWaitKeepsTheModule(t *testing.T) {
+	p := NewProgress()
+	ctx := WithProgress(context.Background(), p)
+	noteAt(ctx, "проверка достижимости", "github.com/cilium/cilium", 1, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() { <-done })
+	held := holdDeadcodeSlots(t)
+	go func() {
+		defer close(done)
+		if err := acquireDeadcode(ctx); err == nil {
+			releaseDeadcode()
+		}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(p.Line(), "ожидание deadcode") {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !strings.Contains(p.Line(), "ожидание deadcode") || !strings.Contains(p.Line(), "github.com/cilium/cilium") {
+		t.Fatal(p.Line())
+	}
+	releaseDeadcode()
+	*held--
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("did not leave the queue")
+	}
+	if !strings.Contains(p.Line(), "проверка достижимости") || !strings.Contains(p.Line(), "github.com/cilium/cilium") {
+		t.Fatal(p.Line())
+	}
+}
+
+func holdDeadcodeSlots(t *testing.T) *int {
+	t.Helper()
+	held := deadcodeSlots
+	for i := 0; i < deadcodeSlots; i++ {
+		if err := acquireDeadcode(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for held > 0 {
+			releaseDeadcode()
+			held--
+		}
+	})
+	return &held
 }
 
 func stubModuleDeadcode(t *testing.T, fn func(context.Context, string, bool) moduleDeadcode) func() {

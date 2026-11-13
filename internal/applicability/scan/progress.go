@@ -136,3 +136,17 @@ func noteAt(ctx context.Context, stage, detail string, index, total int) {
 		p.At(stage, detail, index, total)
 	}
 }
+
+// swapStage replaces the stage name and keeps the module counter.
+// The previous name is restored when a queued deadcode run actually starts.
+func swapStage(ctx context.Context, stage string) string {
+	p := ProgressFrom(ctx)
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	prev := p.stage
+	p.stage = stage
+	p.mu.Unlock()
+	return prev
+}

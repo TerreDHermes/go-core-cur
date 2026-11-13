@@ -17,7 +17,16 @@ import (
 // deadcodeLimit is the budget of one deadcode run. The task deadline is separate
 // and still ends the whole analysis. Past this limit the run is stopped and
 // reachability stays unknown, so the model can still write a verdict.
+// The clock starts after a slot is acquired, so time spent waiting does not count.
 const deadcodeLimit = 4 * time.Minute
+
+// deadcodeSlots is how many deadcode processes may run in this process at once.
+// Each one builds SSA for a whole module, so five of them exhaust the machine
+// even when the CPU still has idle cores.
+const deadcodeSlots = 2
+
+// deadcodeGate hands out deadcodeSlots. A send takes a slot, a receive returns it.
+var deadcodeGate = make(chan struct{}, deadcodeSlots)
 
 // moduleDeadcode is one deadcode invocation for every symbol in a module.
 // Status is ok, no-main, or failed. Dead holds symbols that deadcode reported
@@ -36,6 +45,11 @@ func executeModuleDeadcode(ctx context.Context, moduleDir string, useVendor bool
 	if err != nil {
 		return moduleDeadcode{Status: "failed", Output: "бинарник deadcode не найден в PATH"}
 	}
+	if err := acquireDeadcode(ctx); err != nil {
+		return moduleDeadcode{Status: "failed", Output: err.Error()}
+	}
+	defer releaseDeadcode()
+
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, deadcodeLimit)
 	defer cancel()
@@ -67,6 +81,36 @@ func executeModuleDeadcode(ctx context.Context, moduleDir string, useVendor bool
 		out = ctx.Err().Error()
 	}
 	return moduleDeadcode{Status: "failed", Output: trimRunOutput(out)}
+}
+
+// acquireDeadcode waits until fewer than deadcodeSlots runs are active.
+// The stage stays on the queue until the slot is taken, and a cancelled task
+// leaves the queue without starting a process.
+func acquireDeadcode(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	prev := swapStage(ctx, "ожидание deadcode")
+	select {
+	case deadcodeGate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			releaseDeadcode()
+			if prev != "" {
+				swapStage(ctx, prev)
+			}
+			return err
+		}
+		if prev != "" {
+			swapStage(ctx, prev)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseDeadcode() {
+	<-deadcodeGate
 }
 
 func deadcodeArgs() []string {
@@ -195,9 +239,9 @@ func withMemLimit(env []string) []string {
 	return append(env, "GOMEMLIMIT="+limit)
 }
 
-// cgroupMemoryLimit is three quarters of the cgroup memory cap, in bytes.
-// deadcode builds SSA for the whole module; without a Go limit it grows past
-// the container and the kernel stalls the process until the task deadline.
+// cgroupMemoryLimit is one slot's share of the cgroup cap, in bytes.
+// Three quarters of the cap are reserved for deadcode and then split across
+// deadcodeSlots, so two processes cannot each believe they own most of the RAM.
 func cgroupMemoryLimit() (string, bool) {
 	var paths []string
 	if rel := selfCgroupRel(); rel != "" {
@@ -262,7 +306,11 @@ func memLimitValue(raw string) (string, bool) {
 	if err != nil || n < 64<<20 || n >= 1<<62 {
 		return "", false
 	}
-	return strconv.FormatUint(n*3/4, 10), true
+	share := n * 3 / 4 / uint64(deadcodeSlots)
+	if share < 64<<20 {
+		return "", false
+	}
+	return strconv.FormatUint(share, 10), true
 }
 
 func withVendorMod(env []string) []string {

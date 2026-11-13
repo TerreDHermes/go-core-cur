@@ -21,4 +21,11 @@ func TestProgressLineKeepsTheStageAndGoModCount(t *testing.T) {
 	if !known || n != 2 {
 		t.Fatalf("%d %v", n, known)
 	}
+	if prev := swapStage(ctx, "ожидание deadcode"); prev != "проверка достижимости" {
+		t.Fatal(prev)
+	}
+	got = p.Line()
+	if got != "Остановились на этапе «ожидание deadcode», 2 из 8 (example.com/pkg.Func). Найдено go.mod: 2." {
+		t.Fatal(got)
+	}
 }
