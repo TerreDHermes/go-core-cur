@@ -22,6 +22,7 @@ type namedFunc struct {
 
 func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) *task.ReachReport {
 	report := &task.ReachReport{Tool: "deadcode", Functions: []task.ReachFunc{}}
+	run, stdlib := stdlibFrom(ctx)
 	var fns []task.ReachFunc
 	for _, match := range matches {
 		if !match.Found || !strings.HasSuffix(match.Filename, ".go") || strings.HasSuffix(match.Filename, "_test.go") {
@@ -32,7 +33,11 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 			if len(fns) >= maxReachFuncs {
 				break
 			}
-			fns = append(fns, reachFunc(repoPath, match.Path, fn))
+			item := reachFunc(repoPath, match.Path, fn)
+			if stdlib {
+				item.Symbol = symbolOf(stdlibImportPath(run.Goroot, match.Path), fn)
+			}
+			fns = append(fns, item)
 		}
 	}
 	if len(fns) == 0 {
@@ -47,7 +52,13 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 			fns[i].Output = "не удалось собрать путь импорта"
 			continue
 		}
-		dir, ok := moduleDirForFile(repoPath, fns[i].File)
+		var dir string
+		var ok bool
+		if stdlib {
+			dir, ok = run.ModuleDir, run.ModuleDir != ""
+		} else {
+			dir, ok = moduleDirForFile(repoPath, fns[i].File)
+		}
 		if !ok {
 			fns[i].Status = "failed"
 			fns[i].Output = "не найден go.mod для файла"
@@ -63,7 +74,6 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 		if detail == "" {
 			detail = dir
 		}
-		noteAt(ctx, "проверка достижимости", detail, mi+1, len(order))
 		idxs := groups[dir]
 		if ctx.Err() != nil {
 			for _, i := range idxs {
@@ -72,6 +82,36 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 			}
 			continue
 		}
+		if stdlib {
+			noteAt(ctx, "проверка импорта stdlib", detail, mi+1, len(order))
+			deps, err := listModuleDeps(ctx, dir, hasVendorDir(dir))
+			if err != nil {
+				for _, i := range idxs {
+					fns[i].Status = "failed"
+					fns[i].Output = err.Error()
+				}
+				continue
+			}
+			pending := make([]int, 0, len(idxs))
+			for _, i := range idxs {
+				pkg := stdlibImportPath(run.Goroot, fns[i].File)
+				if _, imported := deps[pkg]; pkg == "" || !imported {
+					fns[i].Status = "missing"
+					if pkg == "" {
+						fns[i].Output = "не удалось собрать путь импорта"
+					} else {
+						fns[i].Output = "пакет " + pkg + " не импортируется программой"
+					}
+					continue
+				}
+				pending = append(pending, i)
+			}
+			if len(pending) == 0 {
+				continue
+			}
+			idxs = pending
+		}
+		noteAt(ctx, "проверка достижимости", detail, mi+1, len(order))
 		res := runModuleDeadcode(ctx, dir, hasVendorDir(dir))
 		for _, i := range idxs {
 			fns[i].Status, fns[i].Output = classifyModuleSymbol(res, fns[i].Symbol)
@@ -79,7 +119,22 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 	}
 	report.Functions = fns
 	report.Reachable, report.Detail = summarizeReach(fns)
+	if stdlib && onlyMissingImports(fns) {
+		report.Detail = "пакеты стандартной библиотеки из патча программа не импортирует: уязвимый код недостижим, уязвимости в этой сборке нет"
+	}
 	return report
+}
+
+func onlyMissingImports(fns []task.ReachFunc) bool {
+	if len(fns) == 0 {
+		return false
+	}
+	for _, fn := range fns {
+		if fn.Status != "missing" {
+			return false
+		}
+	}
+	return true
 }
 
 func reachFunc(repoPath, rel string, fn namedFunc) task.ReachFunc {
@@ -139,6 +194,16 @@ func unknownDetail(fns []task.ReachFunc) string {
 	for _, fn := range fns {
 		if fn.Status == "failed" && strings.Contains(fn.Output, "не уложился") {
 			return trimOneLine(fn.Output) + ", досягаемость не проверена"
+		}
+	}
+	for _, fn := range fns {
+		if fn.Status == "failed" && strings.Contains(fn.Output, "список пакетов не собрался") {
+			return trimOneLine(fn.Output) + ", досягаемость не проверена"
+		}
+	}
+	for _, fn := range fns {
+		if fn.Status == "failed" && strings.Contains(fn.Output, "команда go недоступна") {
+			return "команда go недоступна, досягаемость не проверена"
 		}
 	}
 	for _, fn := range fns {
@@ -317,7 +382,7 @@ func hasVendorDir(moduleDir string) bool {
 }
 
 func functionText(repoPath, rel string, fn namedFunc) string {
-	body, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(strings.TrimPrefix(rel, "./"))))
+	body, err := os.ReadFile(absMatch(repoPath, rel))
 	if err != nil {
 		return ""
 	}

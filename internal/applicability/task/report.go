@@ -9,11 +9,13 @@ import (
 // Report is the per-go.mod document. Fields stay separate for later use.
 // Markdown renders the same data as one string for the download endpoint.
 const (
-	StageNotGo         = "not_go"
-	StagePackageAbsent = "package_absent"
-	StageNoVendor      = "no_vendor"
-	StageNoPatch       = "no_patch"
-	StagePatchFiles    = "patch_files"
+	StageNotGo          = "not_go"
+	StagePackageAbsent  = "package_absent"
+	StageNoVendor       = "no_vendor"
+	StageNoPatch        = "no_patch"
+	StagePatchFiles     = "patch_files"
+	StageStdlibUnpinned = "stdlib_unpinned"
+	StageStdlibNoSource = "stdlib_no_source"
 )
 
 type Report struct {

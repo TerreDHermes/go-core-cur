@@ -408,6 +408,9 @@ func matchByName(matches []task.PatchFileMatch, name string) (task.PatchFileMatc
 
 func absMatch(repoPath, rel string) string {
 	rel = strings.TrimPrefix(rel, "./")
+	if filepath.IsAbs(rel) {
+		return rel
+	}
 	return filepath.Join(repoPath, filepath.FromSlash(rel))
 }
 

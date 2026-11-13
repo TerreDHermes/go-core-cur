@@ -93,7 +93,7 @@ func decideApplicability(report task.Report, verdict string) string {
 	switch report.Stage {
 	case task.StagePackageAbsent:
 		return task.NotApplicable
-	case task.StageNoVendor, task.StageNoPatch, task.StageNotGo:
+	case task.StageNoVendor, task.StageNoPatch, task.StageNotGo, task.StageStdlibUnpinned, task.StageStdlibNoSource:
 		return task.Uncertain
 	}
 	if len(report.PatchFiles) > 0 {

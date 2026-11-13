@@ -20,8 +20,9 @@ import (
 // The clock starts after a slot is acquired, so time spent waiting does not count.
 const deadcodeLimit = 4 * time.Minute
 
-// deadcodeSlots is how many deadcode processes may run in this process at once.
-// Each one builds SSA for a whole module, so five of them exhaust the machine
+// deadcodeSlots is how many heavy Go program loads may run in this process at once.
+// deadcode and, for the standard library, go list -deps each take one slot.
+// Each one loads a whole module, so five of them exhaust the machine
 // even when the CPU still has idle cores.
 const deadcodeSlots = 2
 
@@ -54,11 +55,7 @@ func executeModuleDeadcode(ctx context.Context, moduleDir string, useVendor bool
 	ctx, cancel := context.WithTimeout(ctx, deadcodeLimit)
 	defer cancel()
 
-	env := append([]string{}, os.Environ()...)
-	env = withMemLimit(env)
-	if useVendor {
-		env = withVendorMod(env)
-	}
+	env := deadcodeEnv(ctx, useVendor)
 	stdout, stderr, err := runGrouped(ctx, moduleDir, env, bin, deadcodeArgs()...)
 	if err == nil {
 		dead, perr := parseDeadcode(stdout)
@@ -224,6 +221,29 @@ func killGroup(cmd *exec.Cmd) error {
 		return os.ErrProcessDone
 	}
 	return err
+}
+
+func deadcodeEnv(ctx context.Context, useVendor bool) []string {
+	env := append([]string{}, os.Environ()...)
+	if name := toolchainFrom(ctx); name != "" {
+		env = setEnv(env, "GOTOOLCHAIN", name)
+	}
+	env = withMemLimit(env)
+	if useVendor {
+		env = withVendorMod(env)
+	}
+	return env
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 func withMemLimit(env []string) []string {

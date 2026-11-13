@@ -33,6 +33,7 @@ type Explainer interface {
 
 // Scan chooses one branch of the analysis and does not perform the branch itself.
 // dapp/README.md is read first when that file exists.
+// Package "stdlib" reads the Go release from each go.mod and checks that toolchain, not vendor.
 // Package "root" looks for patch files from the repository root and does not also scan modules.
 // Any other package still checks those root paths when the patch lists files, and keeps a hit as its own result.
 // A repository with no go.mod is not treated as finished: the patch is fetched and the tree is grepped.
@@ -50,6 +51,9 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 	}
 	if in.PackageName == rootPackage {
 		return scanRoot(ctx, in, patches, explain, notes)
+	}
+	if isStdlib(in.PackageName) {
+		return scanStdlib(ctx, in, patches, explain, notes)
 	}
 	paths, err := findGoMods(ctx, in.RepoPath)
 	if err != nil {

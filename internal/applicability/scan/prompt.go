@@ -18,7 +18,12 @@ func verdictPrompt(in Input, report task.Report) string {
 Объяснение возьми только из отчёта. Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.
 Достижимость вызовов ещё не проверялась: если файл патча найден, уязвимый код в дереве есть; если все файлы патча отмечены false, уязвимого кода нет.`
 	opening := verdictLead(in, report)
-	if report.PatchApplied != nil && report.PatchApplied.Applied {
+	if report.Stage == task.StageStdlibUnpinned || report.Stage == task.StageStdlibNoSource {
+		rules = `Версия стандартной библиотеки не позволяет проверить уязвимость. Вывод неопределённый.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
+Причину бери из отчёта: номер патча не закреплён или исходники тулчейна не скачались. Не называй уязвимость применимой и не называй её неприменимой.`
+	} else if report.PatchApplied != nil && report.PatchApplied.Applied {
 		rules = `Все файлы и все фрагменты патча уже есть в текущем коде. Уязвимость неприменима.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
@@ -72,7 +77,9 @@ func verdictPrompt(in Input, report task.Report) string {
 		rules += "\nНе пиши, что патч применён частично, и не перечисляй файлы, где он не лёг: это предложение дописывается после абзаца."
 	}
 	rules += "\nЕсли в отчёте есть dev_notes, учти их в продолжении, когда они относятся к уязвимости. Если поля нет, не упоминай заметки."
-	rules += "\nfixed_versions и версию зависимости для вывода не используй. Если уязвимость есть в списке, версия уже считается уязвимой. Решение только по тому, есть ли уязвимый код и входит ли он в программу."
+	if report.Stage != task.StageStdlibUnpinned && report.Stage != task.StageStdlibNoSource {
+		rules += "\nfixed_versions и версию зависимости для вывода не используй. Если уязвимость есть в списке, версия уже считается уязвимой. Решение только по тому, есть ли уязвимый код и входит ли он в программу."
+	}
 	rules += "\nПродолжение после «Все дело в том, что» — профессиональное мнение: почему вывод именно такой. Пиши о коде и о сути уязвимости. Не описывай процедуру. Нельзя упоминать шаблон, отчёт, поиск, grep, совпадения, паттерны, фразы и то, что начало абзаца задано заранее. Файл или фрагмент кода называй только как обоснование мнения."
 	return fmt.Sprintf(`Ты пишешь итоговый вердикт по анализу уязвимости в проекте.
 %s
@@ -176,6 +183,9 @@ func reachUnknownOpening(in Input, report task.Report) string {
 	if version == "" {
 		version = "неизвестна"
 	}
+	if pinnedToolchain.MatchString(version) {
+		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": стандартная библиотека Go %s есть, но нельзя установить, входит ли уязвимый код в работающую программу. Все дело в том, что`, label, name, version)
+	}
 	if report.FromRoot {
 		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": уязвимый код в репозитории есть, но нельзя установить, входит ли он в работающую программу. Все дело в том, что`, label, name)
 	}
@@ -209,6 +219,10 @@ func reachOpening(in Input, report task.Report, reachable bool) string {
 		version = "неизвестна"
 	}
 	switch {
+	case pinnedToolchain.MatchString(version) && reachable:
+		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s": стандартная библиотека Go %s, уязвимая функция достижима из main. Все дело в том, что`, label, name, version)
+	case pinnedToolchain.MatchString(version):
+		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": стандартная библиотека Go %s, уязвимый код недостижим из main. Все дело в том, что`, label, name, version)
 	case report.FromRoot && reachable:
 		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s": уязвимая функция достижима из main. Все дело в том, что`, label, name)
 	case report.FromRoot:
@@ -246,6 +260,9 @@ func grepChoice(in Input, report task.Report) string {
 func patchAppliedOpening(in Input, report task.Report) string {
 	name := componentName(in.ComponentURL)
 	label := cveLabel(in.CVEID, report.Patch.Aliases)
+	if pinnedToolchain.MatchString(report.Version) {
+		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": исправление уже полностью есть в стандартной библиотеке Go %s. Все дело в том, что`, label, name, report.Version)
+	}
 	if report.FromRoot {
 		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": исправление уже полностью есть в репозитории. Все дело в том, что`, label, name)
 	}
@@ -266,6 +283,20 @@ func verdictOpening(in Input, report task.Report) string {
 		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s". Все дело в том, что`, label, name)
 	case report.FromRoot:
 		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s". Все дело в том, что`, label, name)
+	case report.Stage == task.StageStdlibUnpinned:
+		where := report.GoModPath
+		if where == "" || where == "-" {
+			where = "репозитории"
+		}
+		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": в %s уровень патча стандартной библиотеки не закреплён. Все дело в том, что`, label, name, where)
+	case report.Stage == task.StageStdlibNoSource:
+		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": исходники стандартной библиотеки Go %s не скачались, досягаемость не проверялась. Все дело в том, что`, label, name, version)
+	case pinnedToolchain.MatchString(version) && report.Stage == task.StageNoPatch:
+		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": стандартная библиотека Go %s скачана, но патч не содержит файлов. Все дело в том, что`, label, name, version)
+	case pinnedToolchain.MatchString(version) && patchFileFound(report):
+		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s": стандартная библиотека Go %s, уязвимый код в ней есть. Все дело в том, что`, label, name, version)
+	case pinnedToolchain.MatchString(version):
+		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": в исходниках стандартной библиотеки Go %s описанного кода нет. Все дело в том, что`, label, name, version)
 	case report.Stage == task.StageNotGo:
 		return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": проект не на Go, и по коду вывод не готов. Все дело в том, что`, label, name)
 	case report.Stage == task.StagePackageAbsent:
