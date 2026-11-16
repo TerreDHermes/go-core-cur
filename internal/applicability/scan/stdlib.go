@@ -251,13 +251,10 @@ func scanStdlib(ctx context.Context, in Input, patches PatchSource, explain Expl
 	if p := ProgressFrom(ctx); p != nil {
 		p.SetGoMods(len(paths))
 	}
-	if patches == nil {
-		return nil, fmt.Errorf("cve patch source is not configured")
-	}
 	note(ctx, "загрузка патча")
-	patch, err := patches.Fetch(ctx, in.CVEID)
+	patch, err := fetchPatch(ctx, patches, in.CVEID)
 	if err != nil {
-		return nil, fmt.Errorf("cve patch for: %w", err)
+		return nil, err
 	}
 	if len(paths) == 0 {
 		result := task.ModuleResult{

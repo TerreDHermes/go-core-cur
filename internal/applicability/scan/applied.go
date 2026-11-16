@@ -48,7 +48,7 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 		return &task.PatchCheck{
 			Ran:     false,
 			Outcome: task.PatchCheckNotRun,
-			Detail:  "Проверка не проводилась: патч меняет только тестовые файлы или markdown. Файлы _test.go в сверке не учитываются и не доказывают, что уязвимость закрыта. На вывод это не повлияло.",
+			Detail:  "Проверка не проводилась: патч меняет только тестовые файлы, markdown или txt. Эти файлы в сверке не учитываются и не доказывают, что уязвимость закрыта. На вывод это не повлияло.",
 			Files:   ignoredPatchLines(files),
 		}
 	}
@@ -92,6 +92,10 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 		if isMarkdown(file.Filename) {
 			ignoredMD = true
 			lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
+			continue
+		}
+		if isTextFile(file.Filename) {
+			lines = append(lines, "файл "+file.Filename+": текст, в сверке не учитывается")
 			continue
 		}
 		if isTestGo(file.Filename) {
@@ -212,7 +216,7 @@ func withPartialPatchNote(verdict string, report task.Report) string {
 func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) bool {
 	sawCode := false
 	for _, file := range files {
-		if isMarkdown(file.Filename) || isTestGo(file.Filename) {
+		if ignoredPatchName(file.Filename) {
 			continue
 		}
 		sawCode = true
@@ -228,13 +232,34 @@ func isMarkdown(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".md")
 }
 
+func isTextFile(name string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), ".txt")
+}
+
 func isTestGo(name string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), "_test.go")
 }
 
+// ignoredPatchName is a documentation, notes, or Go test file.
+// Those paths are removed before the tree is searched.
+func ignoredPatchName(name string) bool {
+	return isMarkdown(name) || isTextFile(name) || isTestGo(name)
+}
+
+func codePatchFiles(files []task.PatchFile) []task.PatchFile {
+	kept := make([]task.PatchFile, 0, len(files))
+	for _, file := range files {
+		if ignoredPatchName(file.Filename) {
+			continue
+		}
+		kept = append(kept, file)
+	}
+	return kept
+}
+
 func hasCheckedFile(files []task.PatchFile) bool {
 	for _, file := range files {
-		if !isMarkdown(file.Filename) && !isTestGo(file.Filename) {
+		if !ignoredPatchName(file.Filename) {
 			return true
 		}
 	}
@@ -266,6 +291,10 @@ func ignoredPatchLines(files []task.PatchFile) []string {
 	for _, file := range files {
 		if isTestGo(file.Filename) {
 			lines = append(lines, "файл "+file.Filename+": тест, в сверке не учитывается")
+			continue
+		}
+		if isTextFile(file.Filename) {
+			lines = append(lines, "файл "+file.Filename+": текст, в сверке не учитывается")
 			continue
 		}
 		lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")

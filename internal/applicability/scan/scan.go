@@ -65,13 +65,10 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 	if len(paths) == 0 {
 		return scanNotGo(ctx, in, patches, explain, notes)
 	}
-	if patches == nil {
-		return nil, fmt.Errorf("cve patch source is not configured")
-	}
 	note(ctx, "загрузка патча")
-	patch, err := patches.Fetch(ctx, in.CVEID)
+	patch, err := fetchPatch(ctx, patches, in.CVEID)
 	if err != nil {
-		return nil, fmt.Errorf("cve patch for: %w", err)
+		return nil, err
 	}
 
 	note(ctx, "чтение go.mod")
@@ -108,12 +105,9 @@ func scanNotGo(ctx context.Context, in Input, patches PatchSource, explain Expla
 		return nil, err
 	}
 	note(ctx, "загрузка патча")
-	if patches == nil {
-		return nil, fmt.Errorf("cve patch source is not configured")
-	}
-	patch, err := patches.Fetch(ctx, in.CVEID)
+	patch, err := fetchPatch(ctx, patches, in.CVEID)
 	if err != nil {
-		return nil, fmt.Errorf("cve patch for: %w", err)
+		return nil, err
 	}
 	result := task.ModuleResult{
 		GoModPath: "-",
@@ -195,12 +189,9 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 		return nil, err
 	}
 	note(ctx, "загрузка патча")
-	if patches == nil {
-		return nil, fmt.Errorf("cve patch source is not configured")
-	}
-	patch, err := patches.Fetch(ctx, in.CVEID)
+	patch, err := fetchPatch(ctx, patches, in.CVEID)
 	if err != nil {
-		return nil, fmt.Errorf("cve patch for: %w", err)
+		return nil, err
 	}
 	report := task.Report{
 		GoModPath: ".",
@@ -231,6 +222,18 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 	}
 	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
+}
+
+func fetchPatch(ctx context.Context, patches PatchSource, cveID string) (task.CVEPatch, error) {
+	if patches == nil {
+		return task.CVEPatch{}, fmt.Errorf("cve patch source is not configured")
+	}
+	patch, err := patches.Fetch(ctx, cveID)
+	if err != nil {
+		return task.CVEPatch{}, fmt.Errorf("cve patch for: %w", err)
+	}
+	patch.Files = codePatchFiles(patch.Files)
+	return patch, nil
 }
 
 func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit bool) (task.ModuleResult, bool) {

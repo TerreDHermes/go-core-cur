@@ -337,6 +337,44 @@ func TestScanRootWithoutGoMod(t *testing.T) {
 	}
 }
 
+func TestRootDropsDocsAndTestsBeforeSearch(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "README.md"), "# project\n")
+	mustWrite(t, filepath.Join(root, "NOTES.TXT"), "notes\n")
+	mustWrite(t, filepath.Join(root, "internal", "cri", "config", "config_test.go"), "package config\n")
+	got, err := Scan(context.Background(), Input{
+		RepoPath:    root,
+		CVEID:       "CVE-2026-1",
+		PackageName: "root",
+	}, fakePatch{files: []task.PatchFile{
+		{Filename: "README.md"},
+		{Filename: "RELEASES.md"},
+		{Filename: "NOTES.TXT"},
+		{Filename: "internal/cri/config/config_test.go"},
+		{Filename: "contrib/checkpoint/checkpoint-restore-cri-test.sh"},
+		{Filename: "internal/cri/config/config.go"},
+	}}, staticAI{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := got[0].ReportMD.PatchFiles
+	if len(files) != 2 || files[0].Filename != "contrib/checkpoint/checkpoint-restore-cri-test.sh" || files[1].Filename != "internal/cri/config/config.go" {
+		t.Fatalf("%+v", files)
+	}
+	if files[0].Found || files[1].Found || len(got[0].ReportMD.FoundPatchFiles) != 0 {
+		t.Fatal(files, got[0].ReportMD.FoundPatchFiles)
+	}
+	if len(got[0].ReportMD.Patch.Files) != 2 {
+		t.Fatalf("%+v", got[0].ReportMD.Patch.Files)
+	}
+	if got[0].Applicability != task.NotApplicable || !strings.Contains(got[0].ReportMD.PreVerdict, "Ни один файл патча в корне не найден") {
+		t.Fatal(got[0].Applicability, got[0].ReportMD.PreVerdict)
+	}
+	if strings.Contains(got[0].ReportMD.PreVerdict, "README.md") || strings.Contains(got[0].ReportMD.Markdown(), "README.md") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
+	}
+}
+
 func TestScanRootAllMissing(t *testing.T) {
 	root := t.TempDir()
 	got, err := Scan(context.Background(), Input{RepoPath: root, PackageName: "root"}, fakePatch{files: []task.PatchFile{{Filename: "a.go"}}}, staticAI{})
