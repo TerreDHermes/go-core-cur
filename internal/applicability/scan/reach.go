@@ -33,16 +33,37 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 			if len(fns) >= maxReachFuncs {
 				break
 			}
-			item := reachFunc(repoPath, match.Path, fn)
-			if stdlib {
-				item.Symbol = symbolOf(stdlibImportPath(run.Goroot, match.Path), fn)
-			}
-			fns = append(fns, item)
+			fns = append(fns, reachItem(repoPath, match.Path, fn, stdlib, run.Goroot))
 		}
 	}
 	if len(fns) == 0 {
-		report.Detail = "из патча не удалось выделить функцию"
-		return report
+		fallback := functionsFromChangedTypes(ctx, repoPath, files, matches, stdlib, run.Goroot)
+		switch {
+		case fallback.Cancelled:
+			report.Detail = ctx.Err().Error()
+			return report
+		case len(fallback.Funcs) > 0:
+			for _, loc := range fallback.Funcs {
+				if len(fns) >= maxReachFuncs {
+					break
+				}
+				fns = append(fns, reachItem(repoPath, loc.File, loc.Func, stdlib, run.Goroot))
+			}
+		case fallback.Unread || fallback.Unresolved || (len(fallback.Unused) > 0 && fallback.Unnamed):
+			report.Detail = typeUnknownDetail(fallback)
+			return report
+		case len(fallback.Unused) > 0:
+			v := false
+			report.Reachable = &v
+			report.Detail = unusedTypeDetail(fallback.Unused)
+			return report
+		case fallback.HadGo:
+			report.Detail = "в патче меняется код, но ни функцию, ни тип из него выделить не удалось"
+			return report
+		default:
+			report.Detail = "из патча не удалось выделить функцию"
+			return report
+		}
 	}
 	groups := map[string][]int{}
 	var order []string
@@ -151,6 +172,16 @@ func onlyMissingImports(fns []task.ReachFunc) bool {
 		}
 	}
 	return true
+}
+
+func reachItem(repoPath, file string, fn namedFunc, stdlib bool, goroot string) task.ReachFunc {
+	item := reachFunc(repoPath, file, fn)
+	if stdlib {
+		if pkg := stdlibImportPath(goroot, item.File); pkg != "" {
+			item.Symbol = symbolOf(pkg, fn)
+		}
+	}
+	return item
 }
 
 func reachFunc(repoPath, rel string, fn namedFunc) task.ReachFunc {
