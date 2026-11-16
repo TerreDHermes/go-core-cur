@@ -87,7 +87,17 @@ func executeModuleDeadcode(ctx context.Context, moduleDir string, useVendor bool
 		}
 		return first
 	}
-	kept, dropped, broken := dropBrokenMains(moduleDir, graph, mains, first.Output)
+	scanText := compileScanText(first)
+	kept, dropped, broken := dropBrokenMains(moduleDir, graph, mains, scanText)
+	if len(dropped) == 0 && len(broken) > 0 && ctx.Err() == nil {
+		deps, err := loadDepsGraph(ctx, moduleDir, env, mainPatterns(moduleDir, mains))
+		if ctx.Err() != nil {
+			return deadcodeStopped(ctx, started, err)
+		}
+		if len(deps) > 0 {
+			kept, dropped, broken = dropBrokenMains(moduleDir, deps, mains, scanText)
+		}
+	}
 	if len(dropped) == 0 || len(kept) == 0 || ctx.Err() != nil {
 		if ctx.Err() != nil {
 			return deadcodeStopped(ctx, started, errors.New(first.Output))
@@ -157,7 +167,9 @@ func runDeadcode(ctx context.Context, started time.Time, moduleDir string, env [
 	stdout, stderr, err := runGrouped(ctx, moduleDir, env, bin, args...)
 	res := interpretDeadcode(ctx, started, stdout, stderr, err)
 	res.Skipped = skipped
-	res.BrokenFiles = broken
+	if len(broken) > 0 {
+		res.BrokenFiles = broken
+	}
 	return res
 }
 
@@ -182,7 +194,7 @@ func interpretDeadcode(ctx context.Context, started time.Time, stdout, stderr st
 	if ctx.Err() != nil && strings.TrimSpace(stderr) == "" {
 		out = ctx.Err().Error()
 	}
-	return moduleDeadcode{Status: "failed", Output: trimRunOutput(out)}
+	return moduleDeadcode{Status: "failed", Output: trimRunOutput(out), BrokenFiles: filesFromCompileError(out)}
 }
 
 func deadcodeStopped(ctx context.Context, started time.Time, err error) moduleDeadcode {
@@ -247,12 +259,23 @@ type listedPackage struct {
 	Imports    []string
 }
 
+func loadDepsGraph(ctx context.Context, moduleDir string, env []string, patterns []string) ([]listedPackage, error) {
+	if len(patterns) == 0 {
+		return nil, fmt.Errorf("нет пакетов")
+	}
+	return loadListed(ctx, moduleDir, env, append([]string{"list", "-e", "-json", "-deps"}, patterns...))
+}
+
 func loadModuleGraph(ctx context.Context, moduleDir string, env []string) ([]listedPackage, error) {
+	return loadListed(ctx, moduleDir, env, []string{"list", "-e", "-json", "./..."})
+}
+
+func loadListed(ctx context.Context, moduleDir string, env []string, args []string) ([]listedPackage, error) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		return nil, fmt.Errorf("команда go недоступна")
 	}
-	stdout, stderr, err := runGrouped(ctx, moduleDir, env, goBin, "list", "-e", "-json", "./...")
+	stdout, stderr, err := runGrouped(ctx, moduleDir, env, goBin, args...)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -399,6 +422,26 @@ func packageForFile(pkgs []listedPackage, file string) (string, bool) {
 	return best, best != ""
 }
 
+// vendorImportPath reads a dependency import path from a file under vendor/.
+// go list ./... does not list those packages, so the compiler path is the source.
+func vendorImportPath(moduleDir, file string) (string, bool) {
+	rel, err := filepath.Rel(moduleDir, file)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.ToSlash(rel)
+	const marker = "vendor/"
+	i := strings.Index(rel, marker)
+	if i < 0 {
+		return "", false
+	}
+	dir := filepath.ToSlash(filepath.Dir(filepath.FromSlash(rel[i+len(marker):])))
+	if dir == "." || dir == "" || strings.HasPrefix(dir, "../") {
+		return "", false
+	}
+	return dir, true
+}
+
 // dropBrokenMains removes mains that import a package named by the compiler.
 // kept is what the second deadcode run builds. dropped are the patterns that
 // were removed. broken are the source files from the error.
@@ -410,6 +453,10 @@ func dropBrokenMains(moduleDir string, pkgs, mains []listedPackage, errOut strin
 	bad := map[string]struct{}{}
 	for _, file := range broken {
 		if path, ok := packageForFile(pkgs, file); ok {
+			bad[path] = struct{}{}
+			continue
+		}
+		if path, ok := vendorImportPath(moduleDir, file); ok {
 			bad[path] = struct{}{}
 		}
 	}
@@ -433,6 +480,16 @@ func dropBrokenMains(moduleDir string, pkgs, mains []listedPackage, errOut strin
 	}
 	sort.Strings(dropped)
 	return kept, dropped, broken
+}
+
+func compileScanText(res moduleDeadcode) string {
+	text := res.Output
+	for _, file := range res.BrokenFiles {
+		if file != "" && !strings.Contains(text, file) {
+			text += "\n" + file + ":1:1: broken"
+		}
+	}
+	return text
 }
 
 func skippedMainsNote(patterns []string) string {

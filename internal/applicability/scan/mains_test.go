@@ -2,6 +2,7 @@ package scan
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -118,6 +119,80 @@ func TestUncalledByBuiltMainsIsNotApplicable(t *testing.T) {
 	}
 	if !strings.Contains(report.Detail, "недостижим") || !strings.Contains(report.Detail, "./cmd/bad") {
 		t.Fatal(report.Detail)
+	}
+}
+
+func TestVendorPackageDropsOnlyItsMain(t *testing.T) {
+	raw := `{"ImportPath":"example.com/app/cmd/good","Dir":"/mod/cmd/good","Name":"main","Imports":["example.com/app/pkg"]}
+{"ImportPath":"example.com/app/pkg","Dir":"/mod/pkg","Name":"pkg"}
+{"ImportPath":"example.com/app/cmd/bad","Dir":"/mod/cmd/bad","Name":"main","Imports":["github.com/NVIDIA/go-nvml/pkg/nvml"]}
+`
+	pkgs, err := parseGoListJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := "/mod/vendor/github.com/NVIDIA/go-nvml/pkg/nvml/zz_generated.api.go"
+	got, ok := vendorImportPath("/mod", file)
+	if !ok || got != "github.com/NVIDIA/go-nvml/pkg/nvml" {
+		t.Fatal(got, ok)
+	}
+	errOut := file + ":783:24: undefined: Return\ndeadcode: packages contain errors"
+	kept, dropped, _ := dropBrokenMains("/mod", pkgs, mainPackages(pkgs), errOut)
+	if len(kept) != 1 || kept[0].ImportPath != "example.com/app/cmd/good" || strings.Join(dropped, ",") != "./cmd/bad" {
+		t.Fatalf("kept %+v dropped %v", kept, dropped)
+	}
+}
+
+func TestTransitiveVendorPackageNeedsDeps(t *testing.T) {
+	shallow := []listedPackage{
+		{ImportPath: "example.com/app/cmd/good", Dir: "/mod/cmd/good", Name: "main", Imports: []string{"example.com/app/pkg"}},
+		{ImportPath: "example.com/app/pkg", Dir: "/mod/pkg", Name: "pkg"},
+		{ImportPath: "example.com/app/cmd/bad", Dir: "/mod/cmd/bad", Name: "main", Imports: []string{"k8s.io/gpu"}},
+	}
+	file := "/mod/vendor/github.com/NVIDIA/go-nvml/pkg/nvml/zz_generated.api.go"
+	errOut := file + ":783:24: undefined: Return"
+	kept, dropped, _ := dropBrokenMains("/mod", shallow, mainPackages(shallow), errOut)
+	if len(dropped) != 0 || len(kept) != 2 {
+		t.Fatalf("shallow graph must keep both mains, dropped %v", dropped)
+	}
+	deps := append(shallow, listedPackage{
+		ImportPath: "k8s.io/gpu", Dir: "/mod/vendor/k8s.io/gpu", Name: "gpu",
+		Imports: []string{"github.com/NVIDIA/go-nvml/pkg/nvml"},
+	}, listedPackage{
+		ImportPath: "github.com/NVIDIA/go-nvml/pkg/nvml",
+		Dir:        "/mod/vendor/github.com/NVIDIA/go-nvml/pkg/nvml",
+		Name:       "nvml",
+	})
+	kept, dropped, _ = dropBrokenMains("/mod", deps, mainPackages(shallow), errOut)
+	if len(kept) != 1 || kept[0].ImportPath != "example.com/app/cmd/good" || strings.Join(dropped, ",") != "./cmd/bad" {
+		t.Fatalf("kept %+v dropped %v", kept, dropped)
+	}
+}
+
+func TestLoadDepsGraphSeesVendorPackage(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\ngo 1.22.0\n\nrequire github.com/NVIDIA/go-nvml v0.0.0\n")
+	mustWrite(t, filepath.Join(root, "vendor", "modules.txt"), "# github.com/NVIDIA/go-nvml v0.0.0\n## explicit\ngithub.com/NVIDIA/go-nvml/pkg/nvml\n")
+	mustWrite(t, filepath.Join(root, "vendor", "github.com", "NVIDIA", "go-nvml", "pkg", "nvml", "api.go"), "package nvml\n\nfunc Bad() { var x Return }\n")
+	mustWrite(t, filepath.Join(root, "pkg", "ok.go"), "package pkg\n\nfunc Live() {}\n")
+	mustWrite(t, filepath.Join(root, "cmd", "good", "main.go"), "package main\n\nimport \"example.com/app/pkg\"\n\nfunc main() { pkg.Live() }\n")
+	mustWrite(t, filepath.Join(root, "cmd", "bad", "main.go"), "package main\n\nimport \"github.com/NVIDIA/go-nvml/pkg/nvml\"\n\nfunc main() { nvml.Bad() }\n")
+
+	env := withVendorMod(os.Environ())
+	graph, err := loadModuleGraph(context.Background(), root, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mains := mainPackages(graph)
+	deps, err := loadDepsGraph(context.Background(), root, env, mainPatterns(root, mains))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "vendor", "github.com", "NVIDIA", "go-nvml", "pkg", "nvml", "api.go")
+	errOut := file + ":3:20: undefined: Return\ndeadcode: packages contain errors"
+	kept, dropped, _ := dropBrokenMains(root, deps, mains, errOut)
+	if len(kept) != 1 || len(dropped) != 1 || dropped[0] != "./cmd/bad" {
+		t.Fatalf("kept %+v dropped %v", kept, dropped)
 	}
 }
 
