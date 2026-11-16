@@ -69,6 +69,7 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 		}
 		groups[dir] = append(groups[dir], i)
 	}
+	var skippedNotes []string
 	for mi, dir := range order {
 		detail := modulePath(filepath.Join(dir, "go.mod"))
 		if detail == "" {
@@ -113,7 +114,15 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 		}
 		noteAt(ctx, "проверка достижимости", detail, mi+1, len(order))
 		res := runModuleDeadcode(ctx, dir, hasVendorDir(dir))
+		if note := skippedMainsNote(res.Skipped); note != "" {
+			skippedNotes = append(skippedNotes, note)
+		}
 		for _, i := range idxs {
+			if fileNamedIn(fns[i].File, res.BrokenFiles) {
+				fns[i].Status = "failed"
+				fns[i].Output = "файл с уязвимой функцией не компилируется, досягаемость не проверена"
+				continue
+			}
 			fns[i].Status, fns[i].Output = classifyModuleSymbol(res, fns[i].Symbol)
 		}
 	}
@@ -121,6 +130,13 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 	report.Reachable, report.Detail = summarizeReach(fns)
 	if stdlib && onlyMissingImports(fns) {
 		report.Detail = "пакеты стандартной библиотеки из патча программа не импортирует: уязвимый код недостижим, уязвимости в этой сборке нет"
+	}
+	if extra := strings.Join(skippedNotes, ". "); extra != "" && !strings.Contains(report.Detail, "Из сборки убраны") {
+		if report.Detail != "" {
+			report.Detail += ". " + extra
+		} else {
+			report.Detail = extra
+		}
 	}
 	return report
 }
@@ -184,6 +200,16 @@ func unknownDetail(fns []task.ReachFunc) string {
 	for _, fn := range fns {
 		if fn.Status == "no-main" {
 			return "в модуле нет package main, досягаемость не проверена"
+		}
+	}
+	for _, fn := range fns {
+		if fn.Status == "failed" && strings.Contains(fn.Output, "не компилируется") {
+			return trimOneLine(fn.Output)
+		}
+	}
+	for _, fn := range fns {
+		if fn.Status == "failed" && strings.Contains(fn.Output, "ни один main не собрался") {
+			return trimOneLine(fn.Output)
 		}
 	}
 	for _, fn := range fns {
