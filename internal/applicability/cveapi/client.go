@@ -15,7 +15,7 @@ import (
 )
 
 // Client loads a CVE patch. A response whose message says the upstream read
-// was reset is requested again until the patch arrives or ctx ends.
+// was reset, or contains 403, is requested again until the patch arrives or ctx ends.
 // A timed-out attempt is retried once at 50s and once at 1m. The third
 // timeout stops the fetch. The shared HTTP client has no timeout of its own:
 // each attempt carries its limit on the request context.

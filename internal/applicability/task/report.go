@@ -200,7 +200,7 @@ type NISTDates struct {
 const ConnectionResetPhrase = "read: connection reset by peer"
 
 func (p CVEPatch) NeedsPatchRetry() bool {
-	return strings.Contains(p.Message, ConnectionResetPhrase)
+	return strings.Contains(p.Message, ConnectionResetPhrase) || strings.Contains(p.Message, "403")
 }
 
 // Markdown assembles every saved field into one document.

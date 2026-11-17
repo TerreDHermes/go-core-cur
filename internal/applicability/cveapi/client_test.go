@@ -44,6 +44,53 @@ func TestFetchRetriesConnectionResetUntilPatch(t *testing.T) {
 	}
 }
 
+func TestFetchRetriesMessage403UntilPatch(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			_, _ = w.Write([]byte(`{"cve":"CVE-2025-22869","message":"upstream answered 403"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"cve":"CVE-2025-22869","files":[{"filename":"ssh/handshake.go","patch":"diff"}]}`))
+	}))
+	defer srv.Close()
+
+	got, err := (Client{
+		BaseURL:    srv.URL,
+		HTTP:       srv.Client(),
+		RetryPause: time.Millisecond,
+	}).Fetch(context.Background(), "CVE-2025-22869")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || len(got.Files) != 1 {
+		t.Fatalf("calls %d %+v", calls.Load(), got)
+	}
+}
+
+func TestFetchHTTP403DoesNotRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"forbidden"}`))
+	}))
+	defer srv.Close()
+
+	_, err := (Client{
+		BaseURL:    srv.URL,
+		HTTP:       srv.Client(),
+		RetryPause: time.Millisecond,
+	}).Fetch(context.Background(), "CVE-2025-22869")
+	if err == nil || !strings.Contains(err.Error(), "status 403") {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls %d", calls.Load())
+	}
+}
+
 func TestFetchTimeoutLadderStops(t *testing.T) {
 	var calls atomic.Int32
 	var gaps []time.Duration
