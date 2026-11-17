@@ -230,6 +230,56 @@ func TestPartialPatchNamesOnlyUnappliedCodeFiles(t *testing.T) {
 	}
 }
 
+func TestMissingEditDoesNotBlockFullPatch(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	mustWrite(t, filepath.Join(root, rel), "func HostID() string {\n\treturn \"fixed\"\n}\n")
+	code := appliedHunk(rel, "fixed")
+	edit := appliedHunk("sdk/internal/attrnorm/truncate.go", "fixed")
+	created := task.PatchFile{Filename: "trace/new.go", Patch: "" +
+		"--- /dev/null\n" +
+		"+++ b/trace/new.go\n" +
+		"@@ -0,0 +1,3 @@\n" +
+		"+package trace\n" +
+		"+\n" +
+		"+func New() {}\n"}
+	matches := []task.PatchFileMatch{
+		{Filename: rel, Found: true, Path: "./" + rel},
+		{Filename: edit.Filename, Found: false},
+	}
+	if !patchFullyApplied(root, []task.PatchFile{code, edit}, matches) {
+		t.Fatal("a missing edit of an existing file must not keep the patch open")
+	}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	if note := noteAppliedPatch(root, []task.PatchFile{code, edit}, &report); note == "" || report.PatchApplied == nil || !report.PatchApplied.Applied {
+		t.Fatal(note, report.PatchCheck)
+	}
+	if len(report.PatchCheck.NotApplied) != 0 || !strings.Contains(report.PatchCheck.Section(), "только правит") {
+		t.Fatalf("%+v", report.PatchCheck)
+	}
+
+	matches = append(matches, task.PatchFileMatch{Filename: created.Filename, Found: false})
+	if patchFullyApplied(root, []task.PatchFile{code, edit, created}, matches) {
+		t.Fatal("a missing file created by the patch must keep it open")
+	}
+	report = task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	if note := noteAppliedPatch(root, []task.PatchFile{code, edit, created}, &report); note != "" || report.PatchApplied != nil {
+		t.Fatal(note, report.PatchApplied)
+	}
+	if strings.Join(report.PatchCheck.NotApplied, ",") != created.Filename {
+		t.Fatal(report.PatchCheck.NotApplied)
+	}
+}
+
+func TestOnlyMissingEditsDoNotCountAsApplied(t *testing.T) {
+	edit := appliedHunk("sdk/internal/attrnorm/truncate.go", "fixed")
+	matches := []task.PatchFileMatch{{Filename: edit.Filename, Found: false}}
+	if patchFullyApplied(t.TempDir(), []task.PatchFile{edit}, matches) {
+		t.Fatal("nothing to compare")
+	}
+}
+
 func TestNoAppliedFileSkipsPartialSentence(t *testing.T) {
 	root := t.TempDir()
 	first := "pkg/id.go"

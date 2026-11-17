@@ -88,6 +88,7 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	anyPartial := false
 	ignoredMD := false
 	ignoredTest := false
+	ignoredAbsent := false
 	for _, file := range files {
 		if isMarkdown(file.Filename) {
 			ignoredMD = true
@@ -108,6 +109,8 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 		switch status {
 		case "full":
 			anyFull = true
+		case "absent":
+			ignoredAbsent = true
 		case "partial", "missing":
 			allFull = false
 			anyPartial = true
@@ -119,17 +122,20 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	}
 	switch {
 	case allFull:
-		detail := "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде. Вывод — неприменима."
-		if ignoredMD || ignoredTest {
+		detail := "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде."
+		if ignoredMD || ignoredTest || ignoredAbsent {
 			detail = "Проверка проводилась. Патч применён целиком: все файлы кода и все фрагменты diff уже есть в коде."
-			if ignoredMD {
-				detail += " Файлы markdown в сверке не учитывались."
-			}
-			if ignoredTest {
-				detail += " Тестовые файлы в сверке не учитывались."
-			}
-			detail += " Вывод — неприменима."
 		}
+		if ignoredMD {
+			detail += " Файлы markdown в сверке не учитывались."
+		}
+		if ignoredTest {
+			detail += " Тестовые файлы в сверке не учитывались."
+		}
+		if ignoredAbsent {
+			detail += " Файлы, которых нет в дереве и которые патч только правит, в сверке не учитывались."
+		}
+		detail += " Вывод — неприменима."
 		return &task.PatchCheck{
 			Ran:     true,
 			Outcome: task.PatchCheckFull,
@@ -166,7 +172,10 @@ func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchF
 		return "partial", "файл " + file.Filename + " патч удаляет, но он всё ещё в дереве"
 	}
 	if !ok || !match.Found {
-		return "missing", "файл " + file.Filename + " в дереве не найден"
+		if diffCreatesFile(file.Patch) {
+			return "missing", "файл " + file.Filename + " патч создаёт, но в дереве его нет"
+		}
+		return "absent", "файл " + file.Filename + " в дереве нет, патч его только правит, в сверке не учитывается"
 	}
 	if strings.TrimSpace(file.Patch) == "" {
 		return "unparsed", "файл " + file.Filename + ": diff пустой, сверить нельзя"
@@ -219,8 +228,11 @@ func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.P
 		if ignoredPatchName(file.Filename) {
 			continue
 		}
-		sawCode = true
 		status, _ := assessPatchFile(repoPath, file, matches)
+		if status == "absent" {
+			continue
+		}
+		sawCode = true
 		if status != "full" {
 			return false
 		}
@@ -411,6 +423,30 @@ func linesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// diffCreatesFile reports a patch that adds the whole file.
+// An edit of a file that already existed has context or removed lines.
+func diffCreatesFile(diff string) bool {
+	if strings.TrimSpace(diff) == "" {
+		return true
+	}
+	sawOld := false
+	for _, line := range strings.Split(diff, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "new file mode") || strings.HasPrefix(line, "--- /dev/null") || strings.HasPrefix(line, "--- a/dev/null") {
+			return true
+		}
+		if line == "" || strings.HasPrefix(line, `\`) || strings.HasPrefix(line, "diff ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "old mode") || strings.HasPrefix(line, "new mode") || strings.HasPrefix(line, "deleted file") || strings.HasPrefix(line, "similarity ") || strings.HasPrefix(line, "rename ") {
+			continue
+		}
+		switch line[0] {
+		case '+':
+		case '-', ' ':
+			sawOld = true
+		}
+	}
+	return !sawOld
 }
 
 func diffDeletesFile(diff string) bool {
