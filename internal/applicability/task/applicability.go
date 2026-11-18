@@ -59,14 +59,16 @@ func ClassifyVerdict(text string) string {
 }
 
 // RollupApplicability combines module results into one task value.
-// Any applicable module makes the task applicable. Otherwise an uncertain
-// module keeps the task uncertain. The task is not applicable only when every module is not applicable.
+// Any applicable module makes the task applicable. A module that is uncertain
+// only because it has no vendor does not keep the task uncertain when another
+// module is already not applicable. If every module lacks a vendor, or any
+// module is uncertain for another reason, the task stays uncertain.
 func RollupApplicability(modules []ModuleResult) string {
 	if len(modules) == 0 {
 		return Uncertain
 	}
 	sawNot := false
-	sawUncertain := false
+	sawBlocking := false
 	for _, m := range modules {
 		switch m.Applicability {
 		case Applicable:
@@ -74,10 +76,12 @@ func RollupApplicability(modules []ModuleResult) string {
 		case NotApplicable:
 			sawNot = true
 		default:
-			sawUncertain = true
+			if m.ReportMD.Stage != StageNoVendor {
+				sawBlocking = true
+			}
 		}
 	}
-	if sawUncertain || !sawNot {
+	if sawBlocking || !sawNot {
 		return Uncertain
 	}
 	return NotApplicable

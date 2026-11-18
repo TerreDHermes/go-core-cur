@@ -58,6 +58,19 @@ func TestRollupApplicability(t *testing.T) {
 	if got := RollupApplicability([]ModuleResult{mod(NotApplicable), mod(Applicable)}); got != Applicable {
 		t.Fatal(got)
 	}
+	noVendor := ModuleResult{Applicability: Uncertain, ReportMD: Report{Stage: StageNoVendor}}
+	if got := RollupApplicability([]ModuleResult{mod(NotApplicable), noVendor, noVendor}); got != NotApplicable {
+		t.Fatal(got)
+	}
+	if got := RollupApplicability([]ModuleResult{noVendor, noVendor}); got != Uncertain {
+		t.Fatal(got)
+	}
+	if got := RollupApplicability([]ModuleResult{mod(Applicable), noVendor}); got != Applicable {
+		t.Fatal(got)
+	}
+	if got := RollupApplicability([]ModuleResult{mod(NotApplicable), noVendor, mod(Uncertain)}); got != Uncertain {
+		t.Fatal(got)
+	}
 }
 
 func TestDurationMS(t *testing.T) {
