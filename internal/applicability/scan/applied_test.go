@@ -121,6 +121,56 @@ func TestHunkIgnoresIndentCommentsAndBlankLines(t *testing.T) {
 	}
 }
 
+func TestLaterCodeAfterThePatchDoesNotHideIt(t *testing.T) {
+	root := t.TempDir()
+	rel := "internal/envconfig/envconfig.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -141,6 +141,17 @@ var (\n" +
+		" \t// release.\n" +
+		" \tEnableHTTPFramerReadBufferPooling = boolFromEnv(\"GRPC_GO_EXPERIMENTAL_HTTP_FRAMER_READ_BUFFER_POOLING\", true)\n" +
+		"+\n" +
+		"+	// ControlBufferThrottleLimit is the maximum number of control frames that can\n" +
+		"+	// be queued before throttling is applied.\n" +
+		"+	//\n" +
+		"+	// TODO: Remove this env var once v1.83.0 is release.\n" +
+		"+	ControlBufferThrottleLimit = uint64FromEnv(\"GRPC_GO_EXPERIMENTAL_CONTROL_BUFFER_THROTTLE_LIMIT\", 100, 1, 10000)\n" +
+		" )\n" +
+		" \n" +
+		" func boolFromEnv(envVar string, def bool) bool {\n"
+	// The variable from the patch is present. A later variable was added in
+	// the same block, and the comment says "released" rather than "release".
+	body := "" +
+		"var (\n" +
+		"\tEnableHTTPFramerReadBufferPooling = boolFromEnv(\"GRPC_GO_EXPERIMENTAL_HTTP_FRAMER_READ_BUFFER_POOLING\", true)\n" +
+		"\n" +
+		"\t// ControlBufferThrottleLimit is the maximum number of control frames that can\n" +
+		"\t// be queued before throttling is applied.\n" +
+		"\t//\n" +
+		"\t// TODO: Remove this env var once v1.83.0 is released.\n" +
+		"\tControlBufferThrottleLimit = uint64FromEnv(\"GRPC_GO_EXPERIMENTAL_CONTROL_BUFFER_THROTTLE_LIMIT\", 100, 1, 10000)\n" +
+		"\n" +
+		"\tEnableReceiveBufferCompaction = boolFromEnv(\"GRPC_GO_EXPERIMENTAL_ENABLE_RECEIVE_BUFFER_COMPACTION\", true)\n" +
+		")\n" +
+		"\n" +
+		"func boolFromEnv(envVar string, def bool) bool {\n" +
+		"\treturn true\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	// The added line itself is missing. Later code must not count as the patch.
+	missing := strings.Replace(body, "\tControlBufferThrottleLimit = uint64FromEnv(\"GRPC_GO_EXPERIMENTAL_CONTROL_BUFFER_THROTTLE_LIMIT\", 100, 1, 10000)\n", "", 1)
+	mustWrite(t, filepath.Join(root, rel), missing)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+}
+
 func TestPureDeletionUsesRemovedCode(t *testing.T) {
 	root := t.TempDir()
 	rel := "pkg/id.go"

@@ -314,9 +314,13 @@ func ignoredPatchLines(files []task.PatchFile) []string {
 	return lines
 }
 
+type hunkLine struct {
+	text  string
+	added bool
+}
+
 type diffHunk struct {
-	next    []string
-	added   []string
+	lines   []hunkLine
 	removed []string
 }
 
@@ -347,17 +351,16 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 			continue
 		}
 		if line == "" {
-			current.next = append(current.next, "")
+			current.lines = append(current.lines, hunkLine{})
 			continue
 		}
 		switch line[0] {
 		case '+':
-			current.next = append(current.next, line[1:])
-			current.added = append(current.added, line[1:])
+			current.lines = append(current.lines, hunkLine{text: line[1:], added: true})
 		case '-':
 			current.removed = append(current.removed, line[1:])
 		case ' ':
-			current.next = append(current.next, line[1:])
+			current.lines = append(current.lines, hunkLine{text: line[1:]})
 		default:
 			return nil, false
 		}
@@ -370,21 +373,51 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 }
 
 // hunkApplied reports whether the file already contains this hunk.
-// Added code must appear in order together with its context. Indentation,
-// blank lines and comments are ignored. A pure deletion is applied when the
-// removed code is gone. Similar old code elsewhere does not cancel a hunk
-// whose new code is present.
+// Added code must appear in order. Context that the hunk itself places
+// between those lines must stay with them. Context before the first added
+// line and after the last one may have drifted: a later edit in the same
+// block does not cancel the hunk. Indentation, blank lines and comments
+// are ignored. A pure deletion is applied when the removed code is gone.
 func hunkApplied(file []string, hunk diffHunk) bool {
 	got := codeLines(file)
-	added := codeLines(hunk.added)
-	if len(added) > 0 {
-		return containsContiguous(got, codeLines(hunk.next))
+	if needle := addedNeedle(hunk.lines); len(needle) > 0 {
+		return containsContiguous(got, needle)
 	}
 	removed := codeLines(hunk.removed)
 	if len(removed) > 0 {
 		return !containsContiguous(got, removed)
 	}
 	return true
+}
+
+// addedNeedle is the added code, plus any context the hunk puts between
+// those added lines. Context outside the added block is left out, so a
+// variable inserted after the patch does not hide the patch.
+func addedNeedle(lines []hunkLine) []string {
+	type piece struct {
+		text  string
+		added bool
+	}
+	var pieces []piece
+	for _, line := range lines {
+		text := codeText(line.text)
+		if text == "" {
+			continue
+		}
+		pieces = append(pieces, piece{text: text, added: line.added})
+	}
+	start, end := 0, len(pieces)
+	for start < end && !pieces[start].added {
+		start++
+	}
+	for end > start && !pieces[end-1].added {
+		end--
+	}
+	out := make([]string, 0, end-start)
+	for _, piece := range pieces[start:end] {
+		out = append(out, piece.text)
+	}
+	return out
 }
 
 // codeLines keeps the code of each line. Indentation, repeated spaces,
