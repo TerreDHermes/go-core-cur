@@ -36,8 +36,110 @@ func TestPatchFullyAppliedRequiresEveryHunk(t *testing.T) {
 		"-\treturn \"old\"\n" +
 		"+\treturn \"fixed\"\n" +
 		" }\n"}
-	if patchFullyApplied(root, []task.PatchFile{fileBoth}, match) {
-		t.Fatal("old lines outside the new block must block a full match")
+	if !patchFullyApplied(root, []task.PatchFile{fileBoth}, match) {
+		t.Fatal("new code in the file is enough; another old copy does not cancel the hunk")
+	}
+}
+
+func TestHunkIgnoresIndentCommentsAndBlankLines(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -4,3 +4,3 @@\n" +
+		" \tif err != nil {\n" +
+		"-\t\treturn err\n" +
+		"+\t\treturn nil // patched\n" +
+		" \t}\n"
+	// The fix is in place. Indent is deeper, the comment is absent, line
+	// endings are CRLF, and another function still has the old return.
+	body := strings.Join([]string{
+		"package pkg",
+		"",
+		"func Handle() error {",
+		"\t\tif err != nil {",
+		"\t\t\treturn nil",
+		"\t\t}",
+		"\t\treturn nil",
+		"}",
+		"",
+		"func Other() error {",
+		"\tif err != nil {",
+		"\t\treturn err",
+		"\t}",
+		"\treturn nil",
+		"}",
+		"",
+	}, "\r\n")
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	spaced := "" +
+		"@@ -4,3 +4,3 @@\n" +
+		"     if err != nil {\n" +
+		"-        return err\n" +
+		"+        return nil\n" +
+		"     }\n"
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: spaced}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	withURL := "" +
+		"@@ -1,3 +1,3 @@\n" +
+		" func Host() string {\n" +
+		"-\treturn \"vuln\"\n" +
+		"+\treturn \"http://fixed\"\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func Host() string {\n\treturn \"http://fixed\" /* done */\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: withURL}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	// A real statement between the new lines is a different change.
+	split := "" +
+		"@@ -1,2 +1,3 @@\n" +
+		" func Host() string {\n" +
+		"+\tlog()\n" +
+		"+\treturn \"http://fixed\"\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func Host() string {\n\tlog()\n\tfmt.Println()\n\treturn \"http://fixed\"\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: split}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+
+	// Comment and blank line between the added lines still match.
+	mustWrite(t, filepath.Join(root, rel), "func Host() string {\n\tlog()\n\n\t// kept\n\treturn \"http://fixed\"\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: split}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+}
+
+func TestPureDeletionUsesRemovedCode(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -1,4 +1,3 @@\n" +
+		" func Host() {\n" +
+		"-\tdebug()\n" +
+		" \twork()\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func Host() {\n\twork()\n}\n")
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+	mustWrite(t, filepath.Join(root, rel), "func Host() {\n\tdebug()\n\twork()\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" {
+		t.Fatal(status, line)
 	}
 }
 

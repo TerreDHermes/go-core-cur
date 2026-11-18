@@ -191,7 +191,7 @@ func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchF
 	lines := splitLines(string(body))
 	matched := 0
 	for _, hunk := range hunks {
-		if hunkApplied(lines, hunk.old, hunk.new) {
+		if hunkApplied(lines, hunk) {
 			matched++
 		}
 	}
@@ -315,8 +315,9 @@ func ignoredPatchLines(files []task.PatchFile) []string {
 }
 
 type diffHunk struct {
-	old []string
-	new []string
+	next    []string
+	added   []string
+	removed []string
 }
 
 func parseHunks(diff string) ([]diffHunk, bool) {
@@ -342,17 +343,21 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 			}
 			continue
 		}
-		if line == "" || strings.HasPrefix(line, `\`) {
+		if strings.HasPrefix(line, `\`) {
+			continue
+		}
+		if line == "" {
+			current.next = append(current.next, "")
 			continue
 		}
 		switch line[0] {
 		case '+':
-			current.new = append(current.new, line[1:])
+			current.next = append(current.next, line[1:])
+			current.added = append(current.added, line[1:])
 		case '-':
-			current.old = append(current.old, line[1:])
+			current.removed = append(current.removed, line[1:])
 		case ' ':
-			current.old = append(current.old, line[1:])
-			current.new = append(current.new, line[1:])
+			current.next = append(current.next, line[1:])
 		default:
 			return nil, false
 		}
@@ -364,18 +369,91 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 	return hunks, true
 }
 
-func hunkApplied(file, oldLines, newLines []string) bool {
-	if len(newLines) == 0 && len(oldLines) == 0 {
-		return false
+// hunkApplied reports whether the file already contains this hunk.
+// Added code must appear in order together with its context. Indentation,
+// blank lines and comments are ignored. A pure deletion is applied when the
+// removed code is gone. Similar old code elsewhere does not cancel a hunk
+// whose new code is present.
+func hunkApplied(file []string, hunk diffHunk) bool {
+	got := codeLines(file)
+	added := codeLines(hunk.added)
+	if len(added) > 0 {
+		return containsContiguous(got, codeLines(hunk.next))
 	}
-	if len(newLines) == 0 {
-		return !containsContiguous(file, oldLines)
+	removed := codeLines(hunk.removed)
+	if len(removed) > 0 {
+		return !containsContiguous(got, removed)
 	}
-	at := indexContiguous(file, newLines)
-	if at < 0 {
-		return false
+	return true
+}
+
+// codeLines keeps the code of each line. Indentation, repeated spaces,
+// blank lines and comments are dropped, so a patched file still matches
+// when the indent or a comment differs.
+func codeLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		text := codeText(line)
+		if text == "" {
+			continue
+		}
+		out = append(out, text)
 	}
-	return !oldSurvives(file, oldLines, newLines, at)
+	return out
+}
+
+func codeText(line string) string {
+	var b strings.Builder
+	var quote byte
+	escaped := false
+	raw := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if raw {
+			b.WriteByte(c)
+			if c == '`' {
+				raw = false
+			}
+			continue
+		}
+		if quote != 0 {
+			b.WriteByte(c)
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' && quote == '"' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '"' || c == '\'' || c == '`' {
+			quote = c
+			if c == '`' {
+				raw = true
+				quote = 0
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if c == '/' && i+1 < len(line) && line[i+1] == '/' {
+			break
+		}
+		if c == '/' && i+1 < len(line) && line[i+1] == '*' {
+			end := strings.Index(line[i+2:], "*/")
+			if end < 0 {
+				break
+			}
+			i += 2 + end + 1
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func indexContiguous(file, needle []string) int {
@@ -392,25 +470,6 @@ func indexContiguous(file, needle []string) int {
 
 func containsContiguous(file, needle []string) bool {
 	return indexContiguous(file, needle) >= 0
-}
-
-// oldSurvives reports the pre-patch lines still present outside the matched new block.
-// A pure insertion keeps the old context inside that block, and that does not count.
-func oldSurvives(file, oldLines, newLines []string, newAt int) bool {
-	if len(oldLines) == 0 || len(oldLines) > len(file) {
-		return false
-	}
-	end := newAt + len(newLines)
-	for i := 0; i <= len(file)-len(oldLines); i++ {
-		if !linesEqual(file[i:i+len(oldLines)], oldLines) {
-			continue
-		}
-		if i >= newAt && i+len(oldLines) <= end {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func linesEqual(a, b []string) bool {
