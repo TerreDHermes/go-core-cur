@@ -33,6 +33,7 @@ type Report struct {
 	PatchFiles      []PatchFileMatch `json:"patch_files,omitempty"`
 	FoundPatchFiles []string         `json:"found_patch_files,omitempty"`
 	Grep            *GrepReport      `json:"grep,omitempty"`
+	Feature         *FeatureReport   `json:"feature,omitempty"`
 	Reach           *ReachReport     `json:"reach,omitempty"`
 	PatchApplied    *PatchApplied    `json:"patch_applied,omitempty"`
 	PatchCheck      *PatchCheck      `json:"patch_check,omitempty"`
@@ -114,6 +115,17 @@ type ReachFunc struct {
 	Text   string `json:"text,omitempty"`
 	Status string `json:"status"`
 	Output string `json:"output,omitempty"`
+}
+
+// FeatureReport is the no-patch check for a module that already vendors the package.
+// Import is the package the vulnerability needs. Call is empty when any import of
+// that package is enough, and a function name when the bug sits in an optional feature.
+// Used is set only when the check finished.
+type FeatureReport struct {
+	Import string `json:"import,omitempty"`
+	Call   string `json:"call,omitempty"`
+	Used   *bool  `json:"used,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // GrepReport is the no-patch search: phrases chosen from the description
@@ -239,6 +251,20 @@ func (r Report) Markdown() string {
 	}
 	if r.PreVerdict != "" {
 		fmt.Fprintf(&b, "Pre-verdict: %s\n\n", r.PreVerdict)
+	}
+	if r.Feature != nil {
+		if r.Feature.Import != "" {
+			fmt.Fprintf(&b, "Feature import: `%s`\n\n", r.Feature.Import)
+		}
+		if r.Feature.Call != "" {
+			fmt.Fprintf(&b, "Feature call: `%s`\n\n", r.Feature.Call)
+		}
+		if r.Feature.Used != nil {
+			fmt.Fprintf(&b, "Feature used: `%t`\n\n", *r.Feature.Used)
+		}
+		if r.Feature.Detail != "" {
+			fmt.Fprintf(&b, "Feature: %s\n\n", r.Feature.Detail)
+		}
 	}
 	if r.Grep != nil {
 		if r.Grep.Source != "" {

@@ -90,11 +90,24 @@ func applyGrep(result *task.ModuleResult, ev *grepEvidence) {
 }
 
 func withGrep(ctx context.Context, repoPath string, in Input, patch task.CVEPatch, explain Explainer, notes *task.DevNotes, results []task.ModuleResult) ([]task.ModuleResult, error) {
+	var pending []int
+	for i := range results {
+		if !needsFeatureCheck(results[i].ReportMD) {
+			pending = append(pending, i)
+			continue
+		}
+		if err := attachFeatureUse(ctx, repoPath, in, patch, explain, &results[i]); err != nil {
+			return nil, err
+		}
+	}
+	if len(pending) == 0 {
+		return finish(ctx, in, results, explain, notes)
+	}
 	ev, err := maybeGrep(ctx, repoPath, patch, explain)
 	if err != nil {
 		return nil, err
 	}
-	for i := range results {
+	for _, i := range pending {
 		applyGrep(&results[i], ev)
 	}
 	return finish(ctx, in, results, explain, notes)

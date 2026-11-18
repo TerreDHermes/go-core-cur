@@ -81,6 +81,15 @@ func decideApplicability(report task.Report, verdict string) string {
 		}
 		return task.NotApplicable
 	}
+	if report.Feature != nil && report.Feature.Used != nil {
+		if *report.Feature.Used {
+			return task.Applicable
+		}
+		return task.NotApplicable
+	}
+	if report.Feature != nil {
+		return task.Uncertain
+	}
 	if patchFileFound(report) {
 		return task.Uncertain
 	}

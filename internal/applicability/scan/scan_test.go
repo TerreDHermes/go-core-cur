@@ -575,48 +575,42 @@ func Tail() {
 
 func TestScanGrepsWhenPatchIsMissing(t *testing.T) {
 	root := t.TempDir()
-	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/alertmanager\n\nrequire go.opentelemetry.io/otel/sdk v1.43.0\n")
-	if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mustWrite(t, filepath.Join(root, "sdk", "resource", "host.go"), "package resource\n\nfunc HostID() {}\n")
-	mustWrite(t, filepath.Join(root, ".git", "config"), "HostID\n")
+	writeVendoredGrpc(t, root, `package main
 
-	ai := &captureAI{}
+import "google.golang.org/grpc"
+
+func main() { grpc.Server() }
+`)
+	mustWrite(t, filepath.Join(root, "vendor", "google.golang.org", "grpc", "authz", "authz.go"), "package authz\n\nfunc New() {}\n\nfunc NewStatic() {}\n")
+	mustWrite(t, filepath.Join(root, ".git", "config"), "authz.New\n")
+
+	ai := scriptedAI{answer: "import: google.golang.org/grpc/authz\ncall: authz.New\n"}
 	got, err := Scan(context.Background(), Input{
 		RepoPath:     root,
-		ComponentURL: "https://github.com/prometheus/alertmanager",
-		CVEID:        "CVE-2026-24051",
-		PackageName:  "go.opentelemetry.io/otel/sdk",
+		ComponentURL: "https://github.com/grafana/loki",
+		CVEID:        "CVE-2026-33186",
+		PackageName:  "google.golang.org/grpc",
 	}, describedPatch{}, ai)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ReportMD.Stage != task.StageNoPatch || got[0].ReportMD.Grep == nil {
-		t.Fatalf("%+v", got)
+	if len(got) != 1 || got[0].ReportMD.Stage != task.StageNoPatch || got[0].ReportMD.Grep != nil {
+		t.Fatalf("%s %+v", got[0].ReportMD.Stage, got[0].ReportMD.Grep)
 	}
-	if strings.Join(got[0].ReportMD.Grep.Patterns, ",") != "HostID,readMachineID" {
-		t.Fatal(got[0].ReportMD.Grep.Patterns)
+	feature := got[0].ReportMD.Feature
+	if feature == nil || feature.Used == nil || *feature.Used || feature.Import != "google.golang.org/grpc/authz" {
+		t.Fatalf("%+v", feature)
 	}
-	if len(got[0].ReportMD.Grep.Hits) != 1 || got[0].ReportMD.Grep.Hits[0].Path != "./sdk/resource/host.go" {
-		t.Fatal(got[0].ReportMD.Grep.Hits)
+	if got[0].Applicability != task.NotApplicable {
+		t.Fatal(got[0].Applicability)
 	}
-	if !strings.Contains(got[0].ReportMD.PreVerdict, "HostID, readMachineID") || !strings.Contains(got[0].ReportMD.PreVerdict, "Совпадений сохранено: 1") {
+	if !strings.Contains(got[0].ReportMD.PreVerdict, "не входит в сборку main") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
-	if len(ai.prompts) != 3 || !strings.Contains(ai.prompts[0], "grep -rwn") {
-		t.Fatalf("prompts %d", len(ai.prompts))
+	if !strings.Contains(got[0].Verdict, `неприменима к компоненту "loki"`) {
+		t.Fatal(got[0].Verdict)
 	}
-	if !strings.Contains(ai.prompts[1], "применима") || !strings.Contains(ai.prompts[1], "неприменима") || !strings.Contains(ai.prompts[1], "неопределенна") || !strings.Contains(ai.prompts[1], "func HostID") {
-		t.Fatal(ai.prompts[1])
-	}
-	if len(got[0].ReportMD.Grep.Excerpts) != 1 || !strings.Contains(got[0].ReportMD.Grep.Excerpts[0].Text, "func HostID") {
-		t.Fatal(got[0].ReportMD.Grep.Excerpts)
-	}
-	if !strings.Contains(got[0].ReportMD.Markdown(), "Grep truncated") && got[0].ReportMD.Grep.Truncated {
-		t.Fatal(got[0].ReportMD.Markdown())
-	}
-	if !strings.Contains(got[0].ReportMD.Markdown(), "`HostID`") {
+	if !strings.Contains(got[0].ReportMD.Markdown(), "Feature import: `google.golang.org/grpc/authz`") {
 		t.Fatal(got[0].ReportMD.Markdown())
 	}
 }
@@ -704,6 +698,9 @@ func TestDecideApplicabilityFollowsTheAnalysis(t *testing.T) {
 		{"grep empty but model says yes", task.Report{Grep: &task.GrepReport{}}, "Потенциальная уязвимость применима", task.NotApplicable},
 		{"grep unclear", task.Report{Grep: &task.GrepReport{Hits: []task.GrepHit{{Path: "a.py"}}}}, "model-verdict", task.Uncertain},
 		{"grep ambiguous", task.Report{Grep: &task.GrepReport{Hits: []task.GrepHit{{Path: "a.py"}}}}, "Уязвимость неопределенна: совпадения не про код.", task.Uncertain},
+		{"feature used", task.Report{Feature: &task.FeatureReport{Used: &yes}, Grep: &task.GrepReport{Hits: []task.GrepHit{{Path: "vendor/lib.go"}}}}, "неприменима", task.Applicable},
+		{"feature unused", task.Report{Feature: &task.FeatureReport{Used: &no}}, "применима", task.NotApplicable},
+		{"feature unread", task.Report{Feature: &task.FeatureReport{}}, "применима", task.Uncertain},
 		{"no vendor", task.Report{Stage: task.StageNoVendor}, "пока не оценена", task.Uncertain},
 		{"files missing", task.Report{Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: false}}}, "", task.NotApplicable},
 		{"files found", task.Report{Stage: task.StagePatchFiles, PatchFiles: []task.PatchFileMatch{{Found: true}}}, "применима", task.Uncertain},
@@ -786,8 +783,11 @@ func TestVulnerableVersionContinuesAndEmptyGrepIsNotApplicable(t *testing.T) {
 	if strings.Contains(got[0].ReportMD.PreVerdict, "исправлен") {
 		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
-	if got[0].ReportMD.Grep == nil || len(got[0].ReportMD.Grep.Hits) != 0 || got[0].Applicability != task.NotApplicable {
-		t.Fatalf("%+v %s", got[0].ReportMD.Grep, got[0].Applicability)
+	if got[0].ReportMD.Grep != nil || got[0].ReportMD.Feature == nil || got[0].ReportMD.Feature.Used != nil || got[0].Applicability != task.Uncertain {
+		t.Fatalf("%+v %s", got[0].ReportMD.Feature, got[0].Applicability)
+	}
+	if !strings.Contains(got[0].ReportMD.PreVerdict, "условие из описания не прочитано") {
+		t.Fatal(got[0].ReportMD.PreVerdict)
 	}
 }
 

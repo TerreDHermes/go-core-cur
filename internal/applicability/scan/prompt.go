@@ -33,6 +33,23 @@ func verdictPrompt(in Input, report task.Report) string {
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
 Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
 Причину бери из reach.detail и перескажи её своими словами. Не подменяй её фразой «функция не найдена», если detail говорит другое: сборка не прошла, нет точки входа, тип из патча не прочитан или вызов установить не удалось. Имена инструментов не называй. Не называй уязвимость применимой и не называй её неприменимой.`
+	} else if report.Feature != nil && report.Feature.Used != nil && *report.Feature.Used {
+		rules = `Патча нет. Условие, без которого уязвимость не работает, входит в программу.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
+Уязвимость применима. Причину бери из feature.detail. Файлы внутри vendor самой библиотеки использованием не считай.
+Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
+	} else if report.Feature != nil && report.Feature.Used != nil {
+		rules = `Патча нет. Условие, без которого уязвимость не работает, в программу не входит.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
+Уязвимость неприменима. Причину бери из feature.detail. Файлы внутри vendor самой библиотеки использованием не считай.
+Не меняй идентификатор CVE, алиасы, имя компонента, имя пакета и версию.`
+	} else if report.Feature != nil {
+		rules = `Патча нет, и проверить условие уязвимости не удалось.
+Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
+Начни его ровно с текста ниже и сразу продолжи после «Все дело в том, что».
+Вывод неопределённый. Причину бери из feature.detail. Не называй уязвимость применимой и не называй её неприменимой.`
 	} else if report.Grep != nil && len(report.Grep.Hits) == 0 {
 		rules = `Поиск по дереву не нашёл ни одного совпадения. Следов описанного кода нет.
 Верни один абзац и ничего больше: без заголовка, без кавычек вокруг абзаца и без markdown.
@@ -97,6 +114,12 @@ func verdictLead(in Input, report task.Report) string {
 	}
 	if patchFileFound(report) && (report.Reach == nil || report.Reach.Reachable == nil) {
 		return reachUnknownOpening(in, report)
+	}
+	if report.Feature != nil && report.Feature.Used != nil {
+		return featureOpening(in, report, *report.Feature.Used)
+	}
+	if report.Feature != nil {
+		return featureUnknownOpening(in, report)
 	}
 	if report.Grep != nil && len(report.Grep.Hits) == 0 {
 		return grepNoneOpening(in, report)
@@ -267,6 +290,29 @@ func patchAppliedOpening(in Input, report task.Report) string {
 		return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": исправление уже полностью есть в репозитории. Все дело в том, что`, label, name)
 	}
 	return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": исправление уже полностью есть в зависимости "%s". Все дело в том, что`, label, name, in.PackageName)
+}
+
+func featureOpening(in Input, report task.Report, used bool) string {
+	name := componentName(in.ComponentURL)
+	label := cveLabel(in.CVEID, report.Patch.Aliases)
+	version := report.Version
+	if version == "" {
+		version = "неизвестна"
+	}
+	if used {
+		return fmt.Sprintf(`Потенциальная уязвимость %s применима к компоненту "%s": зависимость "%s" версии "%s" есть, патча нет, и условие уязвимости входит в программу. Все дело в том, что`, label, name, in.PackageName, version)
+	}
+	return fmt.Sprintf(`Потенциальная уязвимость %s неприменима к компоненту "%s": зависимость "%s" версии "%s" есть, но условие уязвимости в программу не входит. Все дело в том, что`, label, name, in.PackageName, version)
+}
+
+func featureUnknownOpening(in Input, report task.Report) string {
+	name := componentName(in.ComponentURL)
+	label := cveLabel(in.CVEID, report.Patch.Aliases)
+	version := report.Version
+	if version == "" {
+		version = "неизвестна"
+	}
+	return fmt.Sprintf(`Потенциальная уязвимость %s пока не оценена для компонента "%s": зависимость "%s" версии "%s" есть, патча нет, и проверить условие уязвимости не удалось. Все дело в том, что`, label, name, in.PackageName, version)
 }
 
 func verdictOpening(in Input, report task.Report) string {
