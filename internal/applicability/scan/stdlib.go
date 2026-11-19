@@ -131,6 +131,16 @@ type currentGo struct {
 	full  string
 }
 
+// CurrentGoVersion is the patch release from GO_CURRENT_VERSION, such as 1.27.4.
+// An empty or unreadable value means the setting is not in effect.
+func CurrentGoVersion() string {
+	parsed, ok := parseCurrentGo(readCurrentGo())
+	if !ok {
+		return ""
+	}
+	return parsed.full
+}
+
 func parseCurrentGo(raw string) (currentGo, bool) {
 	raw = strings.TrimSpace(raw)
 	raw = strings.TrimPrefix(raw, "go")

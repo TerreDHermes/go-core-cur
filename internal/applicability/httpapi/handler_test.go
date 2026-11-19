@@ -14,6 +14,7 @@ import (
 
 type fakeSvc struct {
 	created string
+	detail  task.Task
 }
 
 func (f fakeSvc) Create(context.Context, task.CreateInput) (string, error) {
@@ -34,6 +35,9 @@ func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, int, er
 	}}, 7, nil
 }
 func (f fakeSvc) Get(context.Context, string) (task.Task, error) {
+	if f.detail.ID != "" {
+		return f.detail, nil
+	}
 	return task.Task{
 		ID: "1", Status: task.StatusCompleted, CVEID: "CVE-1",
 		ComponentURL: "https://example.com/r", Branch: "main", PackageName: "pkg",
@@ -231,6 +235,38 @@ func TestCreateAndList(t *testing.T) {
 	}
 	if !strings.Contains(body, `"duration_ms":1000`) || !strings.Contains(body, `"applicability":"applicable"`) {
 		t.Fatal(body)
+	}
+	if strings.Contains(body, `"go_version"`) {
+		t.Fatal(body)
+	}
+}
+
+func TestGoVersionIsCurrentSettingAndSavedToolchain(t *testing.T) {
+	h := NewHandler(fakeSvc{detail: task.Task{
+		ID: "std", Status: task.StatusCompleted, CVEID: "CVE-1",
+		PackageName: "stdlib",
+		Modules: []task.ModuleResult{{
+			GoModPath: "./go.mod",
+			Verdict:   "found",
+			ReportMD:  task.Report{Version: "go1.27.4", Narrative: "журнал"},
+		}},
+	}}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	t.Setenv("GO_CURRENT_VERSION", "1.27.4")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/go-version", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"version":"1.27.4"}` {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/std", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"go_version":"go1.27.4"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
 

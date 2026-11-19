@@ -40,6 +40,28 @@
         }
       }
     },
+    "/api/v1/analysis/go-version": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "currentGoVersion",
+        "summary": "Актуальная версия Go",
+        "description": "Патч из GO_CURRENT_VERSION, например 1.27.4. Пустая строка значит, что переменная не задана или не читается. Это настройка сервера на сейчас, а не версия уже сделанного анализа.",
+        "responses": {
+          "200": {
+            "description": "Версия из окружения",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["version"],
+                  "properties": { "version": { "type": "string", "example": "1.27.4" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analysis/models": {
       "get": {
         "tags": ["analysis"],
@@ -627,6 +649,10 @@
           "report_md": {
             "type": "string",
             "description": "Журнал анализа текстом."
+          },
+          "go_version": {
+            "type": "string",
+            "description": "Тулчейн, которым проверялась стандартная библиотека в этом модуле, например go1.27.4. Берётся из сохранённого отчёта. Для других пакетов поля нет."
           }
         }
       },

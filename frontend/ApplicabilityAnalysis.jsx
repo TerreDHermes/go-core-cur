@@ -66,6 +66,13 @@ const apiService = {
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json.error || 'Не удалось получить список моделей');
     return json.models || [];
+  },
+
+  getCurrentGo: async () => {
+    const res = await fetch(`${API_BASE}/go-version`);
+    if (!res.ok) throw new Error('Failed to fetch Go version');
+    const data = await res.json();
+    return data.version || '';
   }
 };
 
@@ -447,6 +454,25 @@ function SwaggerButton() {
   );
 }
 
+function displayGoVersion(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return 'не выбрана';
+  return value.startsWith('go1.') ? value.slice(2) : value;
+}
+
+function savedGoVersions(task) {
+  if (!task || String(task.package_name || '').toLowerCase() !== 'stdlib') return '';
+  const modules = task.modules || [];
+  if (modules.length === 0) return '';
+  const rows = modules.map((mod) => ({
+    path: mod.go_mod_path || 'go.mod',
+    version: displayGoVersion(mod.go_version)
+  }));
+  const unique = [...new Set(rows.map((row) => row.version))];
+  if (rows.length === 1 || unique.length === 1) return unique[0];
+  return rows.map((row) => `${row.path}: ${row.version}`).join('\n');
+}
+
 export default function ApplicabilityAnalysis() {
   const location = useLocation();
   const { taskId } = useParams();
@@ -476,6 +502,7 @@ export default function ApplicabilityAnalysis() {
 
   const [selectedModuleIndex, setSelectedModuleIndex] = useState(0);
   const [selectedModel, setSelectedModel] = useState('');
+  const [currentGo, setCurrentGo] = useState(undefined);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState('');
 
@@ -490,6 +517,11 @@ export default function ApplicabilityAnalysis() {
         if (!cancelled) setSelectedModel((current) => current || model);
       })
       .catch((err) => console.error('Error loading default model:', err));
+    apiService.getCurrentGo()
+      .then((version) => {
+        if (!cancelled) setCurrentGo(version);
+      })
+      .catch((err) => console.error('Error loading Go version:', err));
     return () => { cancelled = true; };
   }, [isDetailView, isListView]);
 
@@ -662,6 +694,7 @@ export default function ApplicabilityAnalysis() {
     const aiCallsText = aiKnown ? String(currentTask.ai_calls ?? 0) : '—';
     const aiFastText = currentTask.ai_min_ms == null ? '—' : (formatDuration(currentTask.ai_min_ms) || '—');
     const aiSlowText = currentTask.ai_max_ms == null ? '—' : (formatDuration(currentTask.ai_max_ms) || '—');
+    const savedGo = isDone ? savedGoVersions(currentTask) : '';
 
     let statusTheme;
     if (isError) statusTheme = theme.error;
@@ -812,6 +845,12 @@ export default function ApplicabilityAnalysis() {
                   <span style={{ color: theme.textMuted, fontWeight: '600', display: 'block', marginBottom: '0.4rem', fontSize: '0.8rem', textTransform: 'uppercase' }}>Пакет</span>
                   <b style={{ wordBreak: 'break-all', color: theme.primary }}>{currentTask.package_name}</b>
                 </div>
+                {savedGo && (
+                  <div>
+                    <span style={{ color: theme.textMuted, fontWeight: '600', display: 'block', marginBottom: '0.4rem', fontSize: '0.8rem', textTransform: 'uppercase' }}>Go</span>
+                    <b style={{ wordBreak: 'break-all', whiteSpace: 'pre-line', color: theme.primary }}>{savedGo}</b>
+                  </div>
+                )}
                 <div>
                   <span style={{ color: theme.textMuted, fontWeight: '600', display: 'block', marginBottom: '0.4rem', fontSize: '0.8rem', textTransform: 'uppercase' }}>Модель</span>
                   <b style={{ wordBreak: 'break-all', color: theme.primary }}>{currentTask.model || '—'}</b>
@@ -1166,6 +1205,13 @@ export default function ApplicabilityAnalysis() {
                 <input name={name} style={{ border: `1px solid ${theme.border}`, borderRadius: '0.75rem', padding: '1.1rem 1.35rem', fontSize: '1.1rem', width: '100%', boxSizing: 'border-box', outline: 'none', backgroundColor: 'rgba(255,255,255,0.8)', transition: 'all 0.2s', color: theme.textMain }} placeholder={['https://gitlab.com/org/project.git', 'main / release-1.31', 'CVE-2025-22869', 'golang.org/x/crypto/ssh'][i]} value={formData[name]} onChange={e => setFormData({ ...formData, [name]: e.target.value })} onFocus={e => { e.target.style.borderColor = theme.primary; e.target.style.boxShadow = `0 0 0 4px ${theme.primaryLight}`; }} onBlur={e => { e.target.style.borderColor = theme.border; e.target.style.boxShadow = 'none'; }} />
               </div>
             ))}
+            {typeof currentGo === 'string' && (
+              <p style={{ margin: '0 0 1.25rem', color: theme.textMuted, fontSize: '0.95rem', fontWeight: '600' }}>
+                {currentGo
+                  ? `Актуальный Go: ${currentGo}`
+                  : 'Актуальный Go не задан. Линейка без патча возьмёт последнюю опубликованную версию.'}
+              </p>
+            )}
             <button onClick={handleStartAnalysis} disabled={!formData.url || !formData.branch || !formData.cveId || !formData.packageName} style={{ backgroundColor: theme.primary, color: 'white', border: 'none', borderRadius: '0.75rem', padding: '1.25rem', fontWeight: '800', cursor: 'pointer', width: '100%', fontSize: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', transition: 'all 0.2s', boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)', ...((!formData.url || !formData.branch || !formData.cveId || !formData.packageName) ? { backgroundColor: theme.textMuted, cursor: 'not-allowed', opacity: 0.6 } : {}) }} onMouseEnter={e => { if (formData.url) { e.currentTarget.style.backgroundColor = theme.primaryHover; e.currentTarget.style.transform = 'translateY(-2px)'; } }} onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; if (formData.url) e.currentTarget.style.backgroundColor = theme.primary; }}>
               ▶ Запустить анализ
             </button>

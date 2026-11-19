@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"cve-patch-viewer/internal/applicability/scan"
 	"cve-patch-viewer/internal/applicability/task"
 	"cve-patch-viewer/internal/applicability/tasksvc"
 )
@@ -58,6 +59,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis/open", h.open)
 	mux.HandleFunc("GET /api/v1/analysis/status", h.check)
 	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
+	mux.HandleFunc("GET /api/v1/analysis/go-version", h.goVersionHandler)
 	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
 	mux.HandleFunc("POST /api/v1/analysis/{id}/cancel", h.cancel)
@@ -222,12 +224,16 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		if kind == "" {
 			kind = task.ClassifyVerdict(m.Verdict)
 		}
-		modules = append(modules, moduleResponse{
+		response := moduleResponse{
 			GoModPath:     m.GoModPath,
 			Verdict:       m.Verdict,
 			Applicability: kind,
 			ReportMD:      m.ReportMD.PublicText(),
-		})
+		}
+		if strings.EqualFold(t.PackageName, "stdlib") {
+			response.GoVersion = m.ReportMD.Version
+		}
+		modules = append(modules, response)
 	}
 	blame := task.BlameError(t.ErrorMsg)
 	writeJSON(w, http.StatusOK, taskResponse{
@@ -296,6 +302,13 @@ type moduleResponse struct {
 	Verdict       string `json:"verdict"`
 	Applicability string `json:"applicability"`
 	ReportMD      string `json:"report_md"`
+	// GoVersion is the toolchain this stdlib module was checked with.
+	// It is the value saved with the analysis, not the server's current setting.
+	GoVersion string `json:"go_version,omitempty"`
+}
+
+func (h *Handler) goVersionHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": scan.CurrentGoVersion()})
 }
 
 func (h *Handler) defaultModelHandler(w http.ResponseWriter, r *http.Request) {
