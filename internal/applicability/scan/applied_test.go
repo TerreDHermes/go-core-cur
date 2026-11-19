@@ -332,6 +332,62 @@ func TestEditOfMissingFuncDoesNotCount(t *testing.T) {
 	}
 }
 
+func TestEditUnderLaterMissingFuncDoesNotCount(t *testing.T) {
+	root := t.TempDir()
+	rel := "lib/backup/fslocal/fslocal.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -129,6 +129,10 @@ func (fs *FS) NewReadCloser(p common.Part) (io.ReadCloser, error) {\n" +
+		" // comment\n" +
+		" func (fs *FS) NewDirectWriteCloser(p common.Part) (io.WriteCloser, error) {\n" +
+		"+	if !p.IsLocalPathInsideDir(fs.Dir) {\n" +
+		"+		logger.Fatalf(\"outside\")\n" +
+		"+	}\n" +
+		"+\n" +
+		" \tpath := fs.writePath(p)\n"
+	body := "func (fs *FS) NewReadCloser(p common.Part) (io.ReadCloser, error) {\n\treturn nil\n}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "nofunc" || !strings.Contains(line, "FS.NewDirectWriteCloser") {
+		t.Fatal(status, line)
+	}
+
+	// Header only, no func line in the hunk: the missing name is still the header.
+	headerOnly := "" +
+		"@@ func Gone() {\n" +
+		"-\tuse()\n" +
+		"+\tavoid()\n"
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: headerOnly}, match)
+	if status != "nofunc" || !strings.Contains(line, "Gone") {
+		t.Fatal(status, line)
+	}
+
+	withGuard := "func (fs *FS) NewReadCloser(p common.Part) (io.ReadCloser, error) {\n\treturn nil\n}\n\n" +
+		"func (fs *FS) NewDirectWriteCloser(p common.Part) (io.WriteCloser, error) {\n" +
+		"\tif !p.IsLocalPathInsideDir(fs.Dir) {\n\t\tlogger.Fatalf(\"outside\")\n\t}\n" +
+		"\tpath := fs.writePath(p)\n\treturn nil\n}\n"
+	mustWrite(t, filepath.Join(root, rel), withGuard)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	// An edit of the function that exists stays; the lines under the missing one do not.
+	mixed := "" +
+		"@@ func (fs *FS) NewReadCloser(p common.Part) (io.ReadCloser, error) {\n" +
+		" func (fs *FS) NewReadCloser(p common.Part) (io.ReadCloser, error) {\n" +
+		"+	limit()\n" +
+		" }\n" +
+		" func (fs *FS) NewDirectWriteCloser(p common.Part) (io.WriteCloser, error) {\n" +
+		"+	guard()\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func (fs *FS) NewReadCloser(p common.Part) (io.ReadCloser, error) {\n\tlimit()\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: mixed}, match)
+	if status != "full" || !strings.Contains(line, "FS.NewDirectWriteCloser") {
+		t.Fatal(status, line)
+	}
+}
+
 func TestSeparateAdditionsIgnoreNeighborOrder(t *testing.T) {
 	root := t.TempDir()
 	rel := "lib/protoparser/protoparserutil/compress_reader.go"

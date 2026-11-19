@@ -256,12 +256,16 @@ func inspectPatchFile(repoPath string, file task.PatchFile, matches []task.Patch
 	lines := splitLines(string(body))
 	got := patchInspect{body: lines, hunks: hunks}
 	for i, hunk := range hunks {
-		if name, skip := missingFuncEdit(lines, hunk); skip {
+		filtered, name, skip := hunkWithoutMissingFunc(lines, hunk)
+		if name != "" {
 			got.ignored = append(got.ignored, name)
+		}
+		if skip {
 			continue
 		}
+		got.hunks[i] = filtered
 		got.counted++
-		if hunkApplied(lines, hunk) {
+		if hunkApplied(lines, filtered) {
 			got.matched++
 			continue
 		}
@@ -469,21 +473,130 @@ func hunkHeader(line string) string {
 	return strings.TrimSpace(line[i+2:])
 }
 
-// missingFuncEdit reports a hunk that only edits a function the file does not
-// have. A function the patch adds from scratch still counts: its absence means
-// the fix is not there. The name comes from the hunk header.
-func missingFuncEdit(file []string, hunk diffHunk) (string, bool) {
-	if hunkCreatesFunc(hunk) {
-		return "", false
+// hunkWithoutMissingFunc drops edits that land in a function the file does not
+// have. The @@ header names that function when it is the only declaration.
+// When the header function is in the file, a later func line without a plus
+// names the function that owns the lines under it. A func line the patch adds
+// is a new function and stays in the hunk. skip means nothing is left to count.
+func hunkWithoutMissingFunc(file []string, hunk diffHunk) (diffHunk, string, bool) {
+	if fn, ok := parseFuncDecl(hunk.header); ok && !funcExists(file, fn) {
+		if hunkCreatesFunc(hunk) {
+			return hunk, "", false
+		}
+		return hunk, funcLabel(fn), true
 	}
-	fn, ok := parseFuncDecl(hunk.header)
-	if !ok || funcExists(file, fn) {
-		return "", false
+
+	old := map[string]bool{}
+	markOld := func(line string) {
+		fn, ok := parseFuncDecl(line)
+		if !ok {
+			return
+		}
+		old[funcLabel(fn)] = true
+	}
+	for _, line := range hunk.removed {
+		markOld(line)
+	}
+	for _, line := range hunk.lines {
+		if line.added {
+			continue
+		}
+		markOld(line.text)
+	}
+
+	var owner namedFunc
+	haveOwner := false
+	if fn, ok := parseFuncDecl(hunk.header); ok {
+		owner = fn
+		haveOwner = true
+	}
+	introduced := map[string]bool{}
+	ownsMissing := func() bool {
+		if !haveOwner || introduced[funcLabel(owner)] {
+			return false
+		}
+		return !funcExists(file, owner)
+	}
+
+	var kept []hunkLine
+	var keptRemoved []string
+	var keptRaw []string
+	var ignored []string
+	seen := map[string]bool{}
+	note := func(fn namedFunc) {
+		label := funcLabel(fn)
+		if label == "" || seen[label] {
+			return
+		}
+		seen[label] = true
+		ignored = append(ignored, label)
+	}
+	origEdit := false
+	keptEdit := false
+	for _, raw := range hunk.raw {
+		if raw == "" || strings.HasPrefix(raw, `\`) {
+			if !ownsMissing() {
+				keptRaw = append(keptRaw, raw)
+				if raw == "" {
+					kept = append(kept, hunkLine{})
+				}
+			}
+			continue
+		}
+		prefix, text := raw[0], raw[1:]
+		if prefix != '+' && prefix != '-' && prefix != ' ' {
+			continue
+		}
+		if fn, ok := parseFuncDecl(text); ok {
+			owner = fn
+			haveOwner = true
+			if prefix == '+' && !old[funcLabel(fn)] {
+				introduced[funcLabel(fn)] = true
+			}
+		}
+		if prefix == '+' || prefix == '-' {
+			origEdit = true
+		}
+		if ownsMissing() {
+			if prefix == '+' || prefix == '-' {
+				note(owner)
+			}
+			continue
+		}
+		keptRaw = append(keptRaw, raw)
+		switch prefix {
+		case '+':
+			kept = append(kept, hunkLine{text: text, added: true})
+			keptEdit = true
+		case '-':
+			keptRemoved = append(keptRemoved, text)
+			keptEdit = true
+		default:
+			kept = append(kept, hunkLine{text: text})
+		}
+	}
+	names := strings.Join(ignored, ", ")
+	if !origEdit {
+		return hunk, "", false
+	}
+	if !keptEdit {
+		return hunk, names, true
+	}
+	next := hunk
+	next.lines = kept
+	next.removed = keptRemoved
+	next.raw = keptRaw
+	return next, names, false
+}
+
+func funcLabel(fn namedFunc) string {
+	if fn.Name == "" {
+		return ""
 	}
 	if fn.Recv != "" {
-		return fn.Recv + "." + fn.Name, true
+		return fn.Recv + "." + fn.Name
 	}
-	return fn.Name, true
+	return fn.Name
 }
 
 func hunkCreatesFunc(hunk diffHunk) bool {
