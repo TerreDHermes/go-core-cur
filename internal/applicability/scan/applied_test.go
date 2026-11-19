@@ -269,6 +269,69 @@ func TestContextMayDriftByThreeLines(t *testing.T) {
 	}
 }
 
+func TestEditOfMissingFuncDoesNotCount(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -4,3 +4,3 @@ func HostID() string {\n" +
+		" func HostID() string {\n" +
+		"-\treturn \"vuln\"\n" +
+		"+\treturn \"fixed\"\n" +
+		" }\n" +
+		"@@ -20,3 +20,3 @@ func Gone() {\n" +
+		" func Gone() {\n" +
+		"-\tuse()\n" +
+		"+\tavoid()\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func HostID() string {\n\treturn \"fixed\"\n}\n")
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" || !strings.Contains(line, "Gone") {
+		t.Fatal(status, line)
+	}
+
+	onlyGone := "" +
+		"@@ -20,3 +20,3 @@ func Gone() {\n" +
+		" func Gone() {\n" +
+		"-\tuse()\n" +
+		"+\tavoid()\n" +
+		" }\n"
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: onlyGone}, match)
+	if status != "nofunc" {
+		t.Fatal(status, line)
+	}
+
+	// Reset on another type is not the method the hunk edits.
+	method := "" +
+		"@@ -8,3 +8,3 @@ func (sr *snappyReader) Reset(r io.Reader) error {\n" +
+		" func (sr *snappyReader) Reset(r io.Reader) error {\n" +
+		"-\treturn err\n" +
+		"+\treturn nil\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func (r *otherReader) Reset(r io.Reader) error {\n\treturn nil\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: method}, match)
+	if status != "nofunc" || !strings.Contains(line, "snappyReader.Reset") {
+		t.Fatal(status, line)
+	}
+
+	// A function added from scratch still has to be there.
+	created := "" +
+		"@@ -1,3 +1,6 @@ func HostID() string {\n" +
+		" func HostID() string {\n" +
+		" \treturn \"fixed\"\n" +
+		" }\n" +
+		"+func Guard() {}\n"
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: created}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+	mustWrite(t, filepath.Join(root, rel), "func HostID() string {\n\treturn \"fixed\"\n}\nfunc Guard() {}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: created}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+}
+
 func TestSeparateAdditionsIgnoreNeighborOrder(t *testing.T) {
 	root := t.TempDir()
 	rel := "lib/protoparser/protoparserutil/compress_reader.go"

@@ -89,6 +89,7 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	ignoredMD := false
 	ignoredTest := false
 	ignoredAbsent := false
+	ignoredNoFunc := false
 	for _, file := range files {
 		if isMarkdown(file.Filename) {
 			ignoredMD = true
@@ -111,6 +112,8 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 			anyFull = true
 		case "absent":
 			ignoredAbsent = true
+		case "nofunc":
+			ignoredNoFunc = true
 		case "partial", "missing":
 			allFull = false
 			anyPartial = true
@@ -123,7 +126,7 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	switch {
 	case allFull:
 		detail := "Проверка проводилась. Патч применён целиком: все файлы и все фрагменты diff уже есть в коде."
-		if ignoredMD || ignoredTest || ignoredAbsent {
+		if ignoredMD || ignoredTest || ignoredAbsent || ignoredNoFunc {
 			detail = "Проверка проводилась. Патч применён целиком: все файлы кода и все фрагменты diff уже есть в коде."
 		}
 		if ignoredMD {
@@ -134,6 +137,9 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 		}
 		if ignoredAbsent {
 			detail += " Файлы, которых нет в дереве и которые патч только правит, в сверке не учитывались."
+		}
+		if ignoredNoFunc {
+			detail += " Фрагменты функций, которых нет в коде, в сверке не учитывались."
 		}
 		detail += " Вывод — неприменима."
 		return &task.PatchCheck{
@@ -190,15 +196,29 @@ func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchF
 	}
 	lines := splitLines(string(body))
 	matched := 0
+	counted := 0
+	var ignored []string
 	for _, hunk := range hunks {
+		if name, skip := missingFuncEdit(lines, hunk); skip {
+			ignored = append(ignored, name)
+			continue
+		}
+		counted++
 		if hunkApplied(lines, hunk) {
 			matched++
 		}
 	}
-	if matched == len(hunks) {
-		return "full", "файл " + file.Filename + ": все фрагменты патча уже в коде"
+	if counted == 0 {
+		return "nofunc", "файл " + file.Filename + ": функции, которых нет в коде, патч только правит, в сверке не учитывается: " + strings.Join(ignored, ", ")
 	}
-	return "partial", fmt.Sprintf("файл %s: совпали %d из %d фрагментов", file.Filename, matched, len(hunks))
+	note := ""
+	if len(ignored) > 0 {
+		note = ". Не учитывались правки функций, которых нет в коде: " + strings.Join(ignored, ", ")
+	}
+	if matched == counted {
+		return "full", "файл " + file.Filename + ": все фрагменты патча уже в коде" + note
+	}
+	return "partial", fmt.Sprintf("файл %s: совпали %d из %d фрагментов", file.Filename, matched, counted) + note
 }
 
 // withPartialPatchNote appends the fixed sentence when some code files
@@ -229,7 +249,7 @@ func patchFullyApplied(repoPath string, files []task.PatchFile, matches []task.P
 			continue
 		}
 		status, _ := assessPatchFile(repoPath, file, matches)
-		if status == "absent" {
+		if status == "absent" || status == "nofunc" {
 			continue
 		}
 		sawCode = true
@@ -320,6 +340,7 @@ type hunkLine struct {
 }
 
 type diffHunk struct {
+	header  string
 	lines   []hunkLine
 	removed []string
 }
@@ -338,7 +359,7 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 		line = strings.TrimSuffix(line, "\r")
 		if strings.HasPrefix(line, "@@") {
 			flush()
-			current = &diffHunk{}
+			current = &diffHunk{header: hunkHeader(line)}
 			continue
 		}
 		if current == nil {
@@ -370,6 +391,77 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 		return nil, false
 	}
 	return hunks, true
+}
+
+func hunkHeader(line string) string {
+	i := strings.LastIndex(line, "@@")
+	if i < 0 {
+		return ""
+	}
+	return strings.TrimSpace(line[i+2:])
+}
+
+// missingFuncEdit reports a hunk that only edits a function the file does not
+// have. A function the patch adds from scratch still counts: its absence means
+// the fix is not there. The name comes from the hunk header.
+func missingFuncEdit(file []string, hunk diffHunk) (string, bool) {
+	if hunkCreatesFunc(hunk) {
+		return "", false
+	}
+	fn, ok := parseFuncDecl(hunk.header)
+	if !ok || funcExists(file, fn) {
+		return "", false
+	}
+	if fn.Recv != "" {
+		return fn.Recv + "." + fn.Name, true
+	}
+	return fn.Name, true
+}
+
+func hunkCreatesFunc(hunk diffHunk) bool {
+	old := map[string]bool{}
+	mark := func(line string) {
+		fn, ok := parseFuncDecl(line)
+		if !ok {
+			return
+		}
+		old[fn.Recv+"."+fn.Name] = true
+	}
+	for _, line := range hunk.removed {
+		mark(line)
+	}
+	for _, line := range hunk.lines {
+		if line.added {
+			continue
+		}
+		mark(line.text)
+	}
+	for _, line := range hunk.lines {
+		if !line.added {
+			continue
+		}
+		fn, ok := parseFuncDecl(line.text)
+		if !ok {
+			continue
+		}
+		if !old[fn.Recv+"."+fn.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+func funcExists(file []string, fn namedFunc) bool {
+	for _, line := range file {
+		got, ok := parseFuncDecl(line)
+		if !ok {
+			continue
+		}
+		if got.Name == fn.Name && got.Recv == fn.Recv {
+			return true
+		}
+	}
+	return false
 }
 
 // patchContextGap is how many code lines around an edit are still the same
