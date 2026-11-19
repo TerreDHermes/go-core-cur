@@ -74,6 +74,10 @@ func TestStdlibUnpinnedDoesNotDownload(t *testing.T) {
 		lookups++
 		return "", nil
 	})
+	stubCurrentGo(t, "")
+	stubLatest(t, func(context.Context, string) (string, error) {
+		return "", errString("proxy refused")
+	})
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\ngo 1.22\n")
 	got := scanStdlibCase(t, root, stdlibOneFile("src/crypto/tls/conn.go", "fixed"))
@@ -83,11 +87,92 @@ func TestStdlibUnpinnedDoesNotDownload(t *testing.T) {
 	if got.Applicability != task.Uncertain || got.ReportMD.Stage != task.StageStdlibUnpinned {
 		t.Fatalf("%s %s", got.Applicability, got.ReportMD.Stage)
 	}
-	if !strings.Contains(got.ReportMD.PreVerdict, "не закреплён") || !strings.Contains(got.ReportMD.PreVerdict, "go 1.22") {
+	if !strings.Contains(got.ReportMD.PreVerdict, "go 1.22") || !strings.Contains(got.ReportMD.PreVerdict, "найти не удалось") {
 		t.Fatal(got.ReportMD.PreVerdict)
 	}
 	if strings.Contains(got.Verdict, "vendor") {
 		t.Fatal(got.Verdict)
+	}
+}
+
+func TestNewestPatch(t *testing.T) {
+	list := "golang.org/toolchain v0.0.1-go1.26.2.linux-amd64 v0.0.1-go1.26.10.darwin-arm64 v0.0.1-go1.27.0.linux-amd64 v0.0.1-go1.26rc1.linux-amd64"
+	if got := newestPatch(list, "1.26"); got != "1.26.10" {
+		t.Fatal(got)
+	}
+	if got := newestPatch(list, "1.25"); got != "" {
+		t.Fatal(got)
+	}
+}
+
+func TestStdlibCurrentVersionStandsInForTheGoLine(t *testing.T) {
+	goroot := writeStdlibFile(t, "crypto/tls/conn.go", hostBody("vuln"))
+	var gotName string
+	stubLookup(t, func(_ context.Context, _ string, name string) (string, error) {
+		gotName = name
+		return goroot, nil
+	})
+	latestCalls := 0
+	stubLatest(t, func(context.Context, string) (string, error) {
+		latestCalls++
+		return "", errString("should not ask the proxy")
+	})
+	stubCurrentGo(t, "1.27.4")
+	stubList(t, func(context.Context, string, bool) (map[string]struct{}, error) {
+		return map[string]struct{}{"crypto/tls": {}}, nil
+	})
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "ok"}
+	})
+	defer restore()
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\ngo 1.27\n")
+	got := scanStdlibCase(t, root, stdlibOneFile("src/crypto/tls/conn.go", "fixed"))
+	if latestCalls != 0 || gotName != "go1.27.4" || got.ReportMD.Version != "go1.27.4" {
+		t.Fatalf("calls %d name %s version %s", latestCalls, gotName, got.ReportMD.Version)
+	}
+	if !strings.Contains(got.ReportMD.PreVerdict, "актуальная go1.27.4") || !strings.Contains(got.ReportMD.PreVerdict, "go 1.27") {
+		t.Fatal(got.ReportMD.PreVerdict)
+	}
+	if got.Applicability != task.Applicable {
+		t.Fatal(got.Applicability, got.Verdict)
+	}
+
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\ngo 1.26.3\n")
+	got = scanStdlibCase(t, root, stdlibOneFile("src/crypto/tls/conn.go", "fixed"))
+	if gotName != "go1.26.3" || strings.Contains(got.ReportMD.PreVerdict, "актуальная") {
+		t.Fatalf("%s %s", gotName, got.ReportMD.PreVerdict)
+	}
+}
+
+func TestStdlibOlderLineUsesLatestPatch(t *testing.T) {
+	goroot := writeStdlibFile(t, "crypto/tls/conn.go", hostBody("vuln"))
+	var gotName string
+	stubLookup(t, func(_ context.Context, _ string, name string) (string, error) {
+		gotName = name
+		return goroot, nil
+	})
+	var asked string
+	stubLatest(t, func(_ context.Context, minor string) (string, error) {
+		asked = minor
+		return "1.26.12", nil
+	})
+	stubCurrentGo(t, "go1.27.4")
+	stubList(t, func(context.Context, string, bool) (map[string]struct{}, error) {
+		return map[string]struct{}{"crypto/tls": {}}, nil
+	})
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "ok"}
+	})
+	defer restore()
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\ntoolchain go1.26\n")
+	got := scanStdlibCase(t, root, stdlibOneFile("src/crypto/tls/conn.go", "fixed"))
+	if asked != "1.26" || gotName != "go1.26.12" || got.ReportMD.Version != "go1.26.12" {
+		t.Fatalf("asked %s name %s version %s", asked, gotName, got.ReportMD.Version)
+	}
+	if !strings.Contains(got.ReportMD.PreVerdict, "последняя патч-версия go1.26.12") {
+		t.Fatal(got.ReportMD.PreVerdict)
 	}
 }
 
@@ -275,6 +360,10 @@ func TestStdlibTwoModules(t *testing.T) {
 		names = append(names, name+":"+filepath.Base(dir))
 		return goroot, nil
 	})
+	stubCurrentGo(t, "")
+	stubLatest(t, func(context.Context, string) (string, error) {
+		return "", errString("no versions")
+	})
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\ngo 1.22\n")
 	mustWrite(t, filepath.Join(root, "sub", "go.mod"), "module example.com/app/sub\n\ngo 1.21.8\n")
@@ -329,6 +418,20 @@ func TestStdlibMissingFile(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func stubCurrentGo(t *testing.T, version string) {
+	t.Helper()
+	prev := readCurrentGo
+	readCurrentGo = func() string { return version }
+	t.Cleanup(func() { readCurrentGo = prev })
+}
+
+func stubLatest(t *testing.T, fn func(context.Context, string) (string, error)) {
+	t.Helper()
+	prev := latestGoPatch
+	latestGoPatch = fn
+	t.Cleanup(func() { latestGoPatch = prev })
+}
 
 func stubLookup(t *testing.T, fn func(context.Context, string, string) (string, error)) {
 	t.Helper()

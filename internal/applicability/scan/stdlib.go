@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,16 +53,31 @@ func toolchainFrom(ctx context.Context) string {
 
 // goRelease is the toolchain named by one go.mod.
 // Pinned is false when the file has no patch number, as in "go 1.22".
+// Used tells how an unpinned line received its patch: "current" from
+// GO_CURRENT_VERSION, or "latest" from the newest published patch.
 type goRelease struct {
 	Toolchain string
 	Pinned    bool
 	Line      string
+	Used      string
+	Err       error
 }
 
 var (
 	pinnedToolchain = regexp.MustCompile(`^go1\.\d+\.\d+$`)
 	pinnedGoVersion = regexp.MustCompile(`^1\.\d+\.\d+$`)
+	unpinnedGoLine  = regexp.MustCompile(`^go (1\.\d+)$`)
+	unpinnedTool    = regexp.MustCompile(`^toolchain go(1\.\d+)$`)
 )
+
+// currentGoEnv is the Go release the current line is built with, such as 1.27.4.
+const currentGoEnv = "GO_CURRENT_VERSION"
+
+var readCurrentGo = func() string { return strings.TrimSpace(os.Getenv(currentGoEnv)) }
+
+// latestGoPatch returns the newest published patch of a minor, such as 1.26.12 for 1.26.
+// Tests replace it.
+var latestGoPatch = runLatestGoPatch
 
 func goReleaseOf(content string) goRelease {
 	var goLine, toolLine string
@@ -98,6 +114,120 @@ func goReleaseOf(content string) goRelease {
 		return goRelease{Line: "go " + goLine}
 	}
 	return goRelease{}
+}
+
+func unpinnedMinor(line string) string {
+	if m := unpinnedGoLine.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	if m := unpinnedTool.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+type currentGo struct {
+	minor string
+	full  string
+}
+
+func parseCurrentGo(raw string) (currentGo, bool) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "go")
+	if !pinnedGoVersion.MatchString(raw) {
+		return currentGo{}, false
+	}
+	parts := strings.Split(raw, ".")
+	return currentGo{minor: parts[0] + "." + parts[1], full: raw}, true
+}
+
+// resolveRelease gives an unpinned go line the patch the analysis will use.
+// The same minor as GO_CURRENT_VERSION takes that version. Any other minor
+// takes its newest published patch. A line that already has a patch is unchanged.
+func resolveRelease(ctx context.Context, release goRelease) (goRelease, error) {
+	if release.Pinned {
+		return release, nil
+	}
+	minor := unpinnedMinor(release.Line)
+	if minor == "" {
+		return release, nil
+	}
+	if current, ok := parseCurrentGo(readCurrentGo()); ok && current.minor == minor {
+		release.Toolchain = "go" + current.full
+		release.Pinned = true
+		release.Used = "current"
+		return release, nil
+	}
+	full, err := latestGoPatch(ctx, minor)
+	if err != nil {
+		if ctx.Err() != nil {
+			return release, ctx.Err()
+		}
+		release.Err = err
+		return release, nil
+	}
+	release.Toolchain = "go" + full
+	release.Pinned = true
+	release.Used = "latest"
+	return release, nil
+}
+
+func assumedVersionNote(release goRelease) string {
+	switch release.Used {
+	case "current":
+		return fmt.Sprintf(" В файле указано %s без патча, для анализа взята актуальная %s, как если бы она стояла в go.mod.", release.Line, release.Toolchain)
+	case "latest":
+		return fmt.Sprintf(" В файле указано %s без патча, для анализа взята последняя патч-версия %s, как если бы она стояла в go.mod.", release.Line, release.Toolchain)
+	default:
+		return ""
+	}
+}
+
+func runLatestGoPatch(ctx context.Context, minor string) (string, error) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		return "", fmt.Errorf("команда go недоступна")
+	}
+	parent := ctx
+	ctx, cancel := context.WithTimeout(parent, toolchainFetchLimit)
+	defer cancel()
+	env := setEnv(append([]string{}, os.Environ()...), "GOTOOLCHAIN", "local")
+	env = setEnv(env, "GO111MODULE", "on")
+	stdout, stderr, err := runGrouped(ctx, os.TempDir(), env, goBin, "list", "-m", "-versions", "golang.org/toolchain")
+	if err != nil {
+		if parent.Err() != nil {
+			return "", parent.Err()
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("список версий Go %s не собрался за %s", minor, minutesRu(toolchainFetchLimit))
+		}
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("%s", trimRunOutput(msg))
+	}
+	full := newestPatch(stdout, minor)
+	if full == "" {
+		return "", fmt.Errorf("патч-версии Go %s не найдены", minor)
+	}
+	return full, nil
+}
+
+func newestPatch(list, minor string) string {
+	re := regexp.MustCompile(`go` + regexp.QuoteMeta(minor) + `\.(\d+)`)
+	best := -1
+	for _, match := range re.FindAllStringSubmatch(list, -1) {
+		n, err := strconv.Atoi(match[1])
+		if err != nil || n < best {
+			continue
+		}
+		best = n
+	}
+	if best < 0 {
+		return ""
+	}
+	return minor + "." + strconv.Itoa(best)
 }
 
 func directiveLines(content string) []string {
@@ -291,6 +421,10 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 		return task.ModuleResult{}, fmt.Errorf("read %s: %w", rel, err)
 	}
 	release := goReleaseOf(string(body))
+	release, err = resolveRelease(ctx, release)
+	if err != nil {
+		return task.ModuleResult{}, err
+	}
 	report := task.Report{
 		GoModPath:     goModPath,
 		HasVendor:     hasVendorDir(moduleDir),
@@ -304,6 +438,9 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 		if release.Line != "" {
 			text += " (" + release.Line + ")"
 		}
+		if release.Err != nil {
+			text = "В " + goModPath + " указано " + release.Line + " без патча, последнюю патч-версию этой линейки найти не удалось: " + release.Err.Error()
+		}
 		text += ". Проверить нечего."
 		return task.ModuleResult{GoModPath: goModPath, Verdict: text, ReportMD: report}, nil
 	}
@@ -316,10 +453,10 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 		report.Stage = task.StageStdlibNoSource
 		result := task.ModuleResult{
 			GoModPath: goModPath,
-			Verdict: fmt.Sprintf(
+			Verdict: withAssumed(fmt.Sprintf(
 				"Стандартная библиотека Go %s по версии уязвима, но её исходники не скачались: %s. Досягаемость не проверялась.",
 				release.Toolchain, err.Error(),
-			),
+			), release),
 			ReportMD: report,
 		}
 		return result, nil
@@ -328,7 +465,7 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 		report.Stage = task.StageNoPatch
 		return task.ModuleResult{
 			GoModPath: goModPath,
-			Verdict:   fmt.Sprintf("Стандартная библиотека Go %s скачана, но в патче нет файлов. Досягаемость не проверялась.", release.Toolchain),
+			Verdict:   withAssumed(fmt.Sprintf("Стандартная библиотека Go %s скачана, но в патче нет файлов. Досягаемость не проверялась.", release.Toolchain), release),
 			ReportMD:  report,
 		}, nil
 	}
@@ -337,11 +474,15 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
 	ctx = withStdlib(ctx, stdlibRun{ModuleDir: moduleDir, Toolchain: release.Toolchain, Goroot: goroot})
-	verdict := verdictStdlibFiles(release.Toolchain, report.FoundPatchFiles)
+	verdict := withAssumed(verdictStdlibFiles(release.Toolchain, report.FoundPatchFiles), release)
 	verdict += attachReach(ctx, in.RepoPath, patch, &report)
 	result := task.ModuleResult{GoModPath: goModPath, Verdict: verdict, ReportMD: report}
 	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
 	return result, nil
+}
+
+func withAssumed(text string, release goRelease) string {
+	return text + assumedVersionNote(release)
 }
 
 func verdictStdlibFiles(toolchain string, found []string) string {
