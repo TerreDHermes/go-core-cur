@@ -269,6 +269,71 @@ func TestContextMayDriftByThreeLines(t *testing.T) {
 	}
 }
 
+func TestSeparateAdditionsIgnoreNeighborOrder(t *testing.T) {
+	root := t.TempDir()
+	rel := "lib/protoparser/protoparserutil/compress_reader.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -5,17 +5,24 @@ import (\n" +
+		" \t\"io\"\n" +
+		" \t\"sync\"\n" +
+		" \n" +
+		"- \t\"github.com/golang/snappy\"\n" +
+		" \t\"github.com/klauspost/compress/gzip\"\n" +
+		" \t\"github.com/klauspost/compress/zlib\"\n" +
+		" \n" +
+		" \t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil\"\n" +
+		"+ \t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding/snappy\"\n" +
+		" \t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding/zstd\"\n" +
+		" \t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil\"\n" +
+		" )\n" +
+		" \n" +
+		"+// limit to 56MB\n" +
+		"+const maxSnappyBlockSize = 56_000_000\n" +
+		"+\n" +
+		" // ReadUncompressedData reads uncompressed data.\n"
+	// gofmt put the new import where github.com/golang/snappy used to be.
+	body := "" +
+		"import (\n" +
+		"\t\"io\"\n" +
+		"\t\"sync\"\n" +
+		"\n" +
+		"\t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding/snappy\"\n" +
+		"\t\"github.com/klauspost/compress/gzip\"\n" +
+		"\t\"github.com/klauspost/compress/zlib\"\n" +
+		"\n" +
+		"\t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil\"\n" +
+		"\t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding/zstd\"\n" +
+		"\t\"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil\"\n" +
+		")\n" +
+		"\n" +
+		"const maxSnappyBlockSize = 56_000_000\n" +
+		"\n" +
+		"// ReadUncompressedData reads uncompressed data.\n" +
+		"func ReadUncompressedData() {}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	// The new import is present, but the old one was left in place.
+	kept := strings.Replace(body, "\"github.com/klauspost/compress/gzip\"", "\"github.com/golang/snappy\"\n\t\"github.com/klauspost/compress/gzip\"", 1)
+	mustWrite(t, filepath.Join(root, rel), kept)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+
+	// The constant never arrived. The moved import alone is not the whole hunk.
+	missingConst := strings.Replace(body, "const maxSnappyBlockSize = 56_000_000\n", "", 1)
+	mustWrite(t, filepath.Join(root, rel), missingConst)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+}
+
 func TestLineTailMayDifferAfterTheEdit(t *testing.T) {
 	root := t.TempDir()
 	rel := "src/net/http/server.go"

@@ -381,21 +381,35 @@ const patchContextGap = 4
 // The edit is the tokens the new side adds. They must appear in order, and
 // the line must match from its start through the last of those tokens. The
 // rest of that line may differ: it is context the patch did not change.
-// The nearest unchanged line above and below must still be nearby, so a
-// short statement such as total++ does not match a copy in another function.
-// Indentation, blank lines and comments are ignored. A removed line cancels
-// the match only when it is still in that same window. A pure deletion is
-// applied when the removed code is gone from the file.
+// Added lines with other code between them are separate edits: each one may
+// sit anywhere, so a resorted import still counts. A single edit keeps its
+// nearest unchanged line above and below nearby, so total++ does not match a
+// copy in another function. Indentation, blank lines and comments are ignored.
+// A removed line cancels a single edit only inside that window. When the hunk
+// holds several separate edits, the removed lines must be gone from the file.
+// A pure deletion is applied when the removed code is gone from the file.
 func hunkApplied(file []string, hunk diffHunk) bool {
 	got := codeLines(file)
-	block, before, after, removed, ok := editBlock(hunk)
+	runs, removed, ok := editRuns(hunk)
 	if !ok {
 		if len(removed) > 0 {
 			return !containsContiguous(got, removed)
 		}
 		return true
 	}
-	return blockMatches(got, block, before, after, removed)
+	if len(runs) == 1 {
+		run := runs[0]
+		return blockMatches(got, run.block, run.before, run.after, removed)
+	}
+	if removedLinesRemain(got, removed, runs) {
+		return false
+	}
+	for _, run := range runs {
+		if !blockFound(got, run.block) {
+			return false
+		}
+	}
+	return true
 }
 
 // linePat is one code line of the edit. prefix set means the file line must
@@ -411,7 +425,16 @@ type codePiece struct {
 	added bool
 }
 
-func editBlock(hunk diffHunk) (block []linePat, before, after string, removed []string, ok bool) {
+type editRun struct {
+	block  []linePat
+	before string
+	after  string
+}
+
+// editRuns splits a hunk where unchanged code sits between additions.
+// Consecutive added lines stay one run. The const that follows an import
+// block is its own run, so the import may move among its neighbors.
+func editRuns(hunk diffHunk) (runs []editRun, removed []string, ok bool) {
 	var pieces []codePiece
 	for _, line := range hunk.lines {
 		text := codeText(line.text)
@@ -420,44 +443,82 @@ func editBlock(hunk diffHunk) (block []linePat, before, after string, removed []
 		}
 		pieces = append(pieces, codePiece{text: text, added: line.added})
 	}
-	start, end := 0, len(pieces)
-	for start < end && !pieces[start].added {
-		start++
-	}
-	for end > start && !pieces[end-1].added {
-		end--
-	}
 	removed = codeLines(hunk.removed)
-	if start >= end {
-		return nil, "", "", removed, false
-	}
-	if start > 0 {
-		before = pieces[start-1].text
-	}
-	if end < len(pieces) {
-		after = pieces[end].text
-	}
-	var added [][]string
 	var addedAt []int
-	for _, piece := range pieces[start:end] {
+	var added [][]string
+	for i, piece := range pieces {
 		if !piece.added {
-			block = append(block, linePat{text: piece.text})
 			continue
 		}
-		addedAt = append(addedAt, len(block))
+		addedAt = append(addedAt, i)
 		added = append(added, tokenize(piece.text))
-		block = append(block, linePat{text: piece.text})
+	}
+	if len(addedAt) == 0 {
+		return nil, removed, false
 	}
 	keep := insertedTokens(removed, added)
+	pats := make([]linePat, len(addedAt))
 	pos := 0
 	for n, toks := range added {
+		pats[n] = linePat{text: pieces[addedAt[n]].text}
 		lineKeep := keep[pos : pos+len(toks)]
 		pos += len(toks)
 		if prefix, drifted := requiredPrefix(toks, lineKeep); drifted {
-			block[addedAt[n]] = linePat{prefix: prefix}
+			pats[n].prefix = prefix
 		}
 	}
-	return block, before, after, removed, true
+	start := 0
+	for n := 1; n <= len(addedAt); n++ {
+		if n < len(addedAt) && addedAt[n] == addedAt[n-1]+1 {
+			continue
+		}
+		runs = append(runs, runBetween(pieces, addedAt[start], addedAt[n-1], pats[start:n]))
+		start = n
+	}
+	return runs, removed, true
+}
+
+func runBetween(pieces []codePiece, first, last int, block []linePat) editRun {
+	run := editRun{block: append([]linePat(nil), block...)}
+	if first > 0 {
+		run.before = pieces[first-1].text
+	}
+	if last+1 < len(pieces) {
+		run.after = pieces[last+1].text
+	}
+	return run
+}
+
+func removedLinesRemain(file, removed []string, runs []editRun) bool {
+	skip := map[string]bool{}
+	for _, run := range runs {
+		for _, line := range run.block {
+			if line.text != "" {
+				skip[line.text] = true
+			}
+		}
+	}
+	for _, line := range removed {
+		if skip[line] {
+			continue
+		}
+		if containsContiguous(file, []string{line}) {
+			return true
+		}
+	}
+	return false
+}
+
+func blockFound(file []string, block []linePat) bool {
+	if len(block) == 0 || len(block) > len(file) {
+		return false
+	}
+	for i := 0; i <= len(file)-len(block); i++ {
+		if blockAt(file, i, block) {
+			return true
+		}
+	}
+	return false
 }
 
 // insertedTokens reports, for every token of the added lines, whether it is
