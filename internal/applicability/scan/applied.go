@@ -372,52 +372,53 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 	return hunks, true
 }
 
-// patchContextGap is how many code lines around an added block are still
-// the same place. The neighbor from the hunk may sit up to three code
-// lines away; a matching statement further away is a different function.
+// patchContextGap is how many code lines around an edit are still the same
+// place. The neighbor from the hunk may sit up to three code lines away; a
+// matching statement further away is a different function.
 const patchContextGap = 4
 
 // hunkApplied reports whether the file already contains this hunk.
-// Added code must appear in order, with the hunk's own context kept between
-// those lines. The nearest context line above and below must still be nearby,
-// so a short statement such as total++ does not match a copy in another
-// function. A few lines may sit between that neighbor and the new code.
+// The edit is the tokens the new side adds. They must appear in order, and
+// the line must match from its start through the last of those tokens. The
+// rest of that line may differ: it is context the patch did not change.
+// The nearest unchanged line above and below must still be nearby, so a
+// short statement such as total++ does not match a copy in another function.
 // Indentation, blank lines and comments are ignored. A removed line cancels
 // the match only when it is still in that same window. A pure deletion is
 // applied when the removed code is gone from the file.
 func hunkApplied(file []string, hunk diffHunk) bool {
 	got := codeLines(file)
-	anchor := anchorFrom(hunk.lines, hunk.removed)
-	if len(anchor.added) > 0 {
-		return anchorMatches(got, anchor)
+	block, before, after, removed, ok := editBlock(hunk)
+	if !ok {
+		if len(removed) > 0 {
+			return !containsContiguous(got, removed)
+		}
+		return true
 	}
-	if len(anchor.removed) > 0 {
-		return !containsContiguous(got, anchor.removed)
-	}
-	return true
+	return blockMatches(got, block, before, after, removed)
 }
 
-type hunkAnchor struct {
-	before  string
-	added   []string
-	after   string
-	removed []string
+// linePat is one code line of the edit. prefix set means the file line must
+// start with those tokens and may continue differently. Otherwise text must
+// match the whole line.
+type linePat struct {
+	text   string
+	prefix []string
 }
 
-// anchorFrom keeps the added code, the context the hunk places between those
-// lines, and one neighboring context line on each side.
-func anchorFrom(lines []hunkLine, removed []string) hunkAnchor {
-	type piece struct {
-		text  string
-		added bool
-	}
-	var pieces []piece
-	for _, line := range lines {
+type codePiece struct {
+	text  string
+	added bool
+}
+
+func editBlock(hunk diffHunk) (block []linePat, before, after string, removed []string, ok bool) {
+	var pieces []codePiece
+	for _, line := range hunk.lines {
 		text := codeText(line.text)
 		if text == "" {
 			continue
 		}
-		pieces = append(pieces, piece{text: text, added: line.added})
+		pieces = append(pieces, codePiece{text: text, added: line.added})
 	}
 	start, end := 0, len(pieces)
 	for start < end && !pieces[start].added {
@@ -426,42 +427,115 @@ func anchorFrom(lines []hunkLine, removed []string) hunkAnchor {
 	for end > start && !pieces[end-1].added {
 		end--
 	}
-	anchor := hunkAnchor{removed: codeLines(removed)}
-	if start > 0 && start <= len(pieces) {
-		anchor.before = pieces[start-1].text
+	removed = codeLines(hunk.removed)
+	if start >= end {
+		return nil, "", "", removed, false
+	}
+	if start > 0 {
+		before = pieces[start-1].text
 	}
 	if end < len(pieces) {
-		anchor.after = pieces[end].text
+		after = pieces[end].text
 	}
+	var added [][]string
+	var addedAt []int
 	for _, piece := range pieces[start:end] {
-		anchor.added = append(anchor.added, piece.text)
-	}
-	return anchor
-}
-
-func anchorMatches(file []string, anchor hunkAnchor) bool {
-	needle := anchor.added
-	if len(needle) == 0 || len(needle) > len(file) {
-		return false
-	}
-	for i := 0; i <= len(file)-len(needle); i++ {
-		if !linesEqual(file[i:i+len(needle)], needle) {
+		if !piece.added {
+			block = append(block, linePat{text: piece.text})
 			continue
 		}
-		beforeAt, beforeOK := neighborAt(file, i, -1, anchor.before)
+		addedAt = append(addedAt, len(block))
+		added = append(added, tokenize(piece.text))
+		block = append(block, linePat{text: piece.text})
+	}
+	keep := insertedTokens(removed, added)
+	pos := 0
+	for n, toks := range added {
+		lineKeep := keep[pos : pos+len(toks)]
+		pos += len(toks)
+		if prefix, drifted := requiredPrefix(toks, lineKeep); drifted {
+			block[addedAt[n]] = linePat{prefix: prefix}
+		}
+	}
+	return block, before, after, removed, true
+}
+
+// insertedTokens reports, for every token of the added lines, whether it is
+// part of the longest common subsequence with the removed lines. A false
+// entry is text the patch introduced.
+func insertedTokens(removed []string, added [][]string) []bool {
+	var old, neu []string
+	for _, line := range removed {
+		old = append(old, tokenize(line)...)
+	}
+	for _, line := range added {
+		neu = append(neu, line...)
+	}
+	return lcsKeep(old, neu)
+}
+
+// requiredPrefix is the added line through its last new token. drifted is
+// false when the line has no new token, so the whole line must match.
+func requiredPrefix(tokens []string, keep []bool) (prefix []string, drifted bool) {
+	last := -1
+	for i, shared := range keep {
+		if !shared {
+			last = i
+		}
+	}
+	if last < 0 {
+		return tokens, false
+	}
+	return tokens[:last+1], true
+}
+
+func blockMatches(file []string, block []linePat, before, after string, removed []string) bool {
+	if len(block) == 0 || len(block) > len(file) {
+		return false
+	}
+	for i := 0; i <= len(file)-len(block); i++ {
+		if !blockAt(file, i, block) {
+			continue
+		}
+		beforeAt, beforeOK := neighborAt(file, i, -1, before)
 		if !beforeOK {
 			continue
 		}
-		afterAt, afterOK := neighborAt(file, i+len(needle), +1, anchor.after)
+		afterAt, afterOK := neighborAt(file, i+len(block), +1, after)
 		if !afterOK {
 			continue
 		}
+		anchor := hunkAnchor{before: before, after: after, removed: removed, span: len(block)}
 		if removedRemains(file, anchor, i, beforeAt, afterAt) {
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+func blockAt(file []string, at int, block []linePat) bool {
+	for j, pat := range block {
+		if !lineMatches(file[at+j], pat) {
+			return false
+		}
+	}
+	return true
+}
+
+func lineMatches(line string, pat linePat) bool {
+	if pat.prefix == nil {
+		return line == pat.text
+	}
+	got := tokenize(line)
+	return len(got) >= len(pat.prefix) && linesEqual(got[:len(pat.prefix)], pat.prefix)
+}
+
+type hunkAnchor struct {
+	before  string
+	after   string
+	removed []string
+	span    int
 }
 
 // neighborAt finds want within patchContextGap code lines of origin.
@@ -495,7 +569,7 @@ func removedRemains(file []string, anchor hunkAnchor, addedAt, beforeAt, afterAt
 		return false
 	}
 	lo := addedAt
-	hi := addedAt + len(anchor.added)
+	hi := addedAt + anchor.span
 	if anchor.before != "" {
 		lo = beforeAt + 1
 	} else {
@@ -521,8 +595,96 @@ func removedRemains(file []string, anchor hunkAnchor, addedAt, beforeAt, afterAt
 		return false
 	}
 	spanLo := addedAt - lo
-	spanHi := addedAt + len(anchor.added) - lo
+	spanHi := addedAt + anchor.span - lo
 	return containsOutside(file[lo:hi], anchor.removed, spanLo, spanHi)
+}
+
+func lcsKeep(old, neu []string) []bool {
+	keep := make([]bool, len(neu))
+	n, m := len(old), len(neu)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if old[i] == neu[j] {
+				dp[i][j] = dp[i+1][j+1] + 1
+				continue
+			}
+			if dp[i+1][j] >= dp[i][j+1] {
+				dp[i][j] = dp[i+1][j]
+				continue
+			}
+			dp[i][j] = dp[i][j+1]
+		}
+	}
+	i, j := 0, 0
+	for i < n && j < m {
+		if old[i] == neu[j] && dp[i][j] == dp[i+1][j+1]+1 {
+			keep[j] = true
+			i++
+			j++
+			continue
+		}
+		if i+1 <= n && (j+1 > m || dp[i+1][j] >= dp[i][j+1]) {
+			i++
+			continue
+		}
+		j++
+	}
+	return keep
+}
+
+func tokenize(line string) []string {
+	var out []string
+	for i := 0; i < len(line); {
+		c := line[i]
+		if c == ' ' {
+			i++
+			continue
+		}
+		if c == '"' || c == '\'' || c == '`' {
+			j := i + 1
+			for j < len(line) && line[j] != c {
+				if line[j] == '\\' && c != '`' && j+1 < len(line) {
+					j += 2
+					continue
+				}
+				j++
+			}
+			if j < len(line) {
+				j++
+			}
+			out = append(out, line[i:j])
+			i = j
+			continue
+		}
+		if isTokenIdent(c) {
+			j := i + 1
+			for j < len(line) && isTokenIdent(line[j]) {
+				j++
+			}
+			out = append(out, line[i:j])
+			i = j
+			continue
+		}
+		if i+1 < len(line) {
+			switch line[i : i+2] {
+			case "||", "&&", "++", "--", "+=", "-=", "==", "!=", "<=", ">=", ":=", "<-":
+				out = append(out, line[i:i+2])
+				i += 2
+				continue
+			}
+		}
+		out = append(out, line[i:i+1])
+		i++
+	}
+	return out
+}
+
+func isTokenIdent(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func containsOutside(window, needle []string, spanLo, spanHi int) bool {

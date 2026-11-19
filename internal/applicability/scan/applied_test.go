@@ -269,6 +269,53 @@ func TestContextMayDriftByThreeLines(t *testing.T) {
 	}
 }
 
+func TestLineTailMayDifferAfterTheEdit(t *testing.T) {
+	root := t.TempDir()
+	rel := "src/net/http/server.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -2164,7 +2168,7 @@\n" +
+		" \t\t\tif !w.shouldReuseConnection() {\n" +
+		"-\t\t\t\tif w.requestBodyLimitHit || !w.reqBody.consumedEntireBody() {\n" +
+		"+\t\t\t\tif w.requestBodyLimitHit.Load() || !w.reqBody.consumedEntireBody() {\n" +
+		" \t\t\t\t\tc.closeWriteAndWait()\n" +
+		" \t\t\t\t}\n" +
+		" \t\t\t\treturn\n"
+	// The release branch already renamed the tail. The edit .Load() is in place.
+	fixed := "" +
+		"func (w *response) writeHeader() {\n" +
+		"\tif w.requestBodyLimitHit.Load() {\n" +
+		"\t\tw.closeAfterReply = true\n" +
+		"\t}\n" +
+		"}\n" +
+		"func (w *response) shouldReuseConnection() bool {\n" +
+		"\tif w.closeAfterReply || w.requestBodyLimitHit.Load() {\n" +
+		"\t\treturn false\n" +
+		"\t}\n" +
+		"}\n" +
+		"func (c *conn) serve() {\n" +
+		"\tif !w.shouldReuseConnection() {\n" +
+		"\t\tif w.requestBodyLimitHit.Load() || w.closedRequestBodyEarly() {\n" +
+		"\t\t\tc.closeWriteAndWait()\n" +
+		"\t\t}\n" +
+		"\t\treturn\n" +
+		"\t}\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), fixed)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	// Same helpers, but the closeWrite line never received .Load().
+	unfixed := strings.Replace(fixed, "w.requestBodyLimitHit.Load() || w.closedRequestBodyEarly()", "w.requestBodyLimitHit || w.closedRequestBodyEarly()", 1)
+	mustWrite(t, filepath.Join(root, rel), unfixed)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+}
+
 func TestPureDeletionUsesRemovedCode(t *testing.T) {
 	root := t.TempDir()
 	rel := "pkg/id.go"
