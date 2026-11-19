@@ -166,8 +166,15 @@ func TestReachableTrueWhenDeadcodeShowsPath(t *testing.T) {
 	if got[0].Applicability != task.Applicable {
 		t.Fatal(got[0].Applicability)
 	}
-	if !strings.Contains(ai.prompts[0], "достижима из main") {
-		t.Fatal(ai.prompts[0])
+	var verdict string
+	for _, prompt := range ai.prompts {
+		if strings.Contains(prompt, "достижима из main") {
+			verdict = prompt
+			break
+		}
+	}
+	if verdict == "" {
+		t.Fatal(ai.prompts)
 	}
 }
 

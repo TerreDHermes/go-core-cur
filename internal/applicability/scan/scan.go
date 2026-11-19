@@ -42,6 +42,8 @@ type Explainer interface {
 // A module with a vendor directory and a patch continues into the patch steps.
 // An empty patch asks the model for five grep phrases, searches the tree, and stores both.
 // A reachable patch is not applicable only when every hunk is already present.
+// A file the line check left short is shown to the model once, without the match count.
+// A yes counts only when the quoted line is in that slice and carries the added tokens.
 // The deterministic text stays in Report.PreVerdict. Explain replaces Verdict and fills Narrative.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
 	note(ctx, "чтение заметок")
@@ -77,7 +79,7 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 		return nil, err
 	}
 	if len(matched) == 0 {
-		if hit, ok := rootHit(ctx, in.RepoPath, patch, false); ok {
+		if hit, ok := rootHit(ctx, in.RepoPath, patch, false, explain); ok {
 			return finish(ctx, in, []task.ModuleResult{hit}, explain, notes)
 		}
 		return searchAbsent(ctx, in, patch, explain, notes)
@@ -89,9 +91,9 @@ func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer)
 			return nil, ctx.Err()
 		}
 		noteAt(ctx, "разбор модуля", mod.GoModPath, i+1, len(matched))
-		found = append(found, analyzeModule(ctx, in, patch, mod))
+		found = append(found, analyzeModule(ctx, in, patch, mod, explain))
 	}
-	if hit, ok := rootHit(ctx, in.RepoPath, patch, false); ok {
+	if hit, ok := rootHit(ctx, in.RepoPath, patch, false, explain); ok {
 		found = append(found, hit)
 	}
 	return withGrep(ctx, in.RepoPath, in, patch, explain, notes, found)
@@ -136,11 +138,11 @@ func scanNotGo(ctx context.Context, in Input, patches PatchSource, explain Expla
 		result.Verdict = verdictNotGo(0, false)
 	}
 	applyGrep(&result, ev)
-	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 
-func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod matchedModule) task.ModuleResult {
+func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod matchedModule, explain Explainer) task.ModuleResult {
 	report := task.Report{
 		GoModPath:     mod.GoModPath,
 		HasVendor:     mod.HasVendor,
@@ -156,7 +158,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 			Verdict:   verdictNoVendor(in, mod.GoModPath, len(patch.Files) == 0),
 			ReportMD:  report,
 		}
-		result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+		result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 		return result
 	}
 	if len(patch.Files) == 0 {
@@ -166,7 +168,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 			Verdict:   verdictNoPatch(in, mod.GoModPath),
 			ReportMD:  report,
 		}
-		result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+		result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 		return result
 	}
 	matches := locatePatchFiles(in.RepoPath, mod.VendorAbs, in.PackageName, patch.Files)
@@ -180,7 +182,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 		Verdict:   verdict,
 		ReportMD:  report,
 	}
-	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return result
 }
 
@@ -205,10 +207,10 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 			Verdict:   verdictRootNoPatch(),
 			ReportMD:  report,
 		}
-		result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+		result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 		return withGrep(ctx, in.RepoPath, in, patch, explain, notes, []task.ModuleResult{result})
 	}
-	if hit, ok := rootHit(ctx, in.RepoPath, patch, true); ok {
+	if hit, ok := rootHit(ctx, in.RepoPath, patch, true, explain); ok {
 		return finish(ctx, in, []task.ModuleResult{hit}, explain, notes)
 	}
 	matches := locateRootPatchFiles(in.RepoPath, patch.Files)
@@ -220,7 +222,7 @@ func scanRoot(ctx context.Context, in Input, patches PatchSource, explain Explai
 		Verdict:   verdictRootPatchFiles(report.FoundPatchFiles),
 		ReportMD:  report,
 	}
-	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 
@@ -236,7 +238,7 @@ func fetchPatch(ctx context.Context, patches PatchSource, cveID string) (task.CV
 	return patch, nil
 }
 
-func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit bool) (task.ModuleResult, bool) {
+func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit bool, explain Explainer) (task.ModuleResult, bool) {
 	if len(patch.Files) == 0 {
 		return task.ModuleResult{}, false
 	}
@@ -259,7 +261,7 @@ func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit
 	}
 	verdict += attachReach(ctx, repoPath, patch, &report)
 	result := task.ModuleResult{GoModPath: ".", Verdict: verdict, ReportMD: report}
-	result.Verdict += noteAppliedPatch(repoPath, patch.Files, &result.ReportMD)
+	result.Verdict += noteAppliedPatchReviewed(ctx, explain, repoPath, patch.Files, &result.ReportMD)
 	return result, true
 }
 
@@ -295,7 +297,7 @@ func searchAbsent(ctx context.Context, in Input, patch task.CVEPatch, explain Ex
 		}
 	}
 	applyGrep(&result, ev)
-	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }
 

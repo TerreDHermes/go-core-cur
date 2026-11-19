@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,12 +11,24 @@ import (
 )
 
 // noteAppliedPatch fills the patch-check dossier and, only for a full match,
-// marks the vulnerability not applicable.
+// marks the vulnerability not applicable. It does not call the model.
 func noteAppliedPatch(repoPath string, files []task.PatchFile, report *task.Report) string {
+	return noteAppliedPatchReviewed(context.Background(), nil, repoPath, files, report)
+}
+
+// noteAppliedPatchReviewed is noteAppliedPatch, then one model call per code
+// file the line check did not fully accept. The call sees the unmatched
+// additions and a slice of the file, not the match count. A full result after
+// that still marks the vulnerability not applicable. A model error leaves the
+// line check as it was.
+func noteAppliedPatchReviewed(ctx context.Context, explain Explainer, repoPath string, files []task.PatchFile, report *task.Report) string {
 	if report == nil {
 		return ""
 	}
 	check := buildPatchCheck(repoPath, files, report)
+	if explain != nil && check != nil && check.Ran && check.Outcome != task.PatchCheckFull {
+		check = refinePatchCheck(ctx, explain, repoPath, files, report)
+	}
 	report.PatchCheck = check
 	if check == nil || check.Outcome != task.PatchCheckFull {
 		report.PatchApplied = nil
@@ -81,6 +94,38 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 		}
 	}
 
+	return summarizePatchItems(collectPatchItems(repoPath, files, report))
+}
+
+type patchItem struct {
+	name   string
+	status string
+	line   string
+}
+
+func collectPatchItems(repoPath string, files []task.PatchFile, report *task.Report) []patchItem {
+	items := make([]patchItem, 0, len(files))
+	for _, file := range files {
+		items = append(items, classifyPatchFile(repoPath, file, report.PatchFiles))
+	}
+	return items
+}
+
+func classifyPatchFile(repoPath string, file task.PatchFile, matches []task.PatchFileMatch) patchItem {
+	if isMarkdown(file.Filename) {
+		return patchItem{name: file.Filename, status: "markdown", line: "файл " + file.Filename + ": markdown, в сверке не учитывается"}
+	}
+	if isTextFile(file.Filename) {
+		return patchItem{name: file.Filename, status: "text", line: "файл " + file.Filename + ": текст, в сверке не учитывается"}
+	}
+	if isTestGo(file.Filename) {
+		return patchItem{name: file.Filename, status: "test", line: "файл " + file.Filename + ": тест, в сверке не учитывается"}
+	}
+	status, line := assessPatchFile(repoPath, file, matches)
+	return patchItem{name: file.Filename, status: status, line: line}
+}
+
+func summarizePatchItems(items []patchItem) *task.PatchCheck {
 	var lines []string
 	var notApplied []string
 	allFull := true
@@ -90,37 +135,32 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 	ignoredTest := false
 	ignoredAbsent := false
 	ignoredNoFunc := false
-	for _, file := range files {
-		if isMarkdown(file.Filename) {
-			ignoredMD = true
-			lines = append(lines, "файл "+file.Filename+": markdown, в сверке не учитывается")
-			continue
+	meaningHit := false
+	for _, item := range items {
+		lines = append(lines, item.line)
+		if strings.Contains(item.line, "построчное сравнение не зачло") {
+			meaningHit = true
 		}
-		if isTextFile(file.Filename) {
-			lines = append(lines, "файл "+file.Filename+": текст, в сверке не учитывается")
-			continue
-		}
-		if isTestGo(file.Filename) {
-			ignoredTest = true
-			lines = append(lines, "файл "+file.Filename+": тест, в сверке не учитывается")
-			continue
-		}
-		status, line := assessPatchFile(repoPath, file, report.PatchFiles)
-		lines = append(lines, line)
-		switch status {
+		switch item.status {
 		case "full":
 			anyFull = true
+		case "markdown":
+			ignoredMD = true
+		case "test":
+			ignoredTest = true
 		case "absent":
 			ignoredAbsent = true
 		case "nofunc":
 			ignoredNoFunc = true
+		case "text":
+			// A text file is listed and does not decide whether the patch is present.
 		case "partial", "missing":
 			allFull = false
 			anyPartial = true
-			notApplied = append(notApplied, file.Filename)
+			notApplied = append(notApplied, item.name)
 		default:
 			allFull = false
-			notApplied = append(notApplied, file.Filename)
+			notApplied = append(notApplied, item.name)
 		}
 	}
 	switch {
@@ -140,6 +180,9 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 		}
 		if ignoredNoFunc {
 			detail += " Фрагменты функций, которых нет в коде, в сверке не учитывались."
+		}
+		if meaningHit {
+			detail += " Часть фрагментов зачтена смысловой сверкой."
 		}
 		detail += " Вывод — неприменима."
 		return &task.PatchCheck{
@@ -170,55 +213,78 @@ func buildPatchCheck(repoPath string, files []task.PatchFile, report *task.Repor
 }
 
 func assessPatchFile(repoPath string, file task.PatchFile, matches []task.PatchFileMatch) (string, string) {
+	got := inspectPatchFile(repoPath, file, matches)
+	return got.status, got.line
+}
+
+type patchInspect struct {
+	status    string
+	line      string
+	body      []string
+	hunks     []diffHunk
+	unmatched []int
+	counted   int
+	matched   int
+	ignored   []string
+}
+
+func inspectPatchFile(repoPath string, file task.PatchFile, matches []task.PatchFileMatch) patchInspect {
 	match, ok := matchByName(matches, file.Filename)
 	if diffDeletesFile(file.Patch) {
 		if !ok || !match.Found {
-			return "full", "файл " + file.Filename + " патч удаляет, и в дереве его нет"
+			return patchInspect{status: "full", line: "файл " + file.Filename + " патч удаляет, и в дереве его нет"}
 		}
-		return "partial", "файл " + file.Filename + " патч удаляет, но он всё ещё в дереве"
+		return patchInspect{status: "partial", line: "файл " + file.Filename + " патч удаляет, но он всё ещё в дереве"}
 	}
 	if !ok || !match.Found {
 		if diffCreatesFile(file.Patch) {
-			return "missing", "файл " + file.Filename + " патч создаёт, но в дереве его нет"
+			return patchInspect{status: "missing", line: "файл " + file.Filename + " патч создаёт, но в дереве его нет"}
 		}
-		return "absent", "файл " + file.Filename + " в дереве нет, патч его только правит, в сверке не учитывается"
+		return patchInspect{status: "absent", line: "файл " + file.Filename + " в дереве нет, патч его только правит, в сверке не учитывается"}
 	}
 	if strings.TrimSpace(file.Patch) == "" {
-		return "unparsed", "файл " + file.Filename + ": diff пустой, сверить нельзя"
+		return patchInspect{status: "unparsed", line: "файл " + file.Filename + ": diff пустой, сверить нельзя"}
 	}
 	body, err := os.ReadFile(absMatch(repoPath, match.Path))
 	if err != nil {
-		return "unparsed", "файл " + file.Filename + " не прочитан"
+		return patchInspect{status: "unparsed", line: "файл " + file.Filename + " не прочитан"}
 	}
 	hunks, parsed := parseHunks(file.Patch)
 	if !parsed || len(hunks) == 0 {
-		return "unparsed", "файл " + file.Filename + ": diff не разобран по фрагментам"
+		return patchInspect{status: "unparsed", line: "файл " + file.Filename + ": diff не разобран по фрагментам"}
 	}
 	lines := splitLines(string(body))
-	matched := 0
-	counted := 0
-	var ignored []string
-	for _, hunk := range hunks {
+	got := patchInspect{body: lines, hunks: hunks}
+	for i, hunk := range hunks {
 		if name, skip := missingFuncEdit(lines, hunk); skip {
-			ignored = append(ignored, name)
+			got.ignored = append(got.ignored, name)
 			continue
 		}
-		counted++
+		got.counted++
 		if hunkApplied(lines, hunk) {
-			matched++
+			got.matched++
+			continue
 		}
+		got.unmatched = append(got.unmatched, i)
 	}
-	if counted == 0 {
-		return "nofunc", "файл " + file.Filename + ": функции, которых нет в коде, патч только правит, в сверке не учитывается: " + strings.Join(ignored, ", ")
+	if got.counted == 0 {
+		got.status = "nofunc"
+		got.line = "файл " + file.Filename + ": функции, которых нет в коде, патч только правит, в сверке не учитывается: " + strings.Join(got.ignored, ", ")
+		return got
 	}
+	got.status, got.line = patchedFileLine(file.Filename, got.matched, got.counted, got.ignored)
+	return got
+}
+
+func patchedFileLine(name string, matched, counted int, ignored []string) (string, string) {
 	note := ""
 	if len(ignored) > 0 {
 		note = ". Не учитывались правки функций, которых нет в коде: " + strings.Join(ignored, ", ")
 	}
 	if matched == counted {
-		return "full", "файл " + file.Filename + ": все фрагменты патча уже в коде" + note
+		return "full", "файл " + name + ": все фрагменты патча уже в коде" + note
 	}
-	return "partial", fmt.Sprintf("файл %s: совпали %d из %d фрагментов", file.Filename, matched, counted) + note
+	return "partial", fmt.Sprintf("файл %s: совпали %d из %d фрагментов", name, matched, counted) + note
 }
 
 // withPartialPatchNote appends the fixed sentence when some code files
@@ -343,6 +409,7 @@ type diffHunk struct {
 	header  string
 	lines   []hunkLine
 	removed []string
+	raw     []string
 }
 
 func parseHunks(diff string) ([]diffHunk, bool) {
@@ -368,6 +435,7 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 			}
 			continue
 		}
+		current.raw = append(current.raw, line)
 		if strings.HasPrefix(line, `\`) {
 			continue
 		}

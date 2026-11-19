@@ -410,7 +410,7 @@ func scanStdlib(ctx context.Context, in Input, patches PatchSource, explain Expl
 			return nil, ctx.Err()
 		}
 		noteAt(ctx, "чтение версии Go", "./"+rel, i+1, len(paths))
-		result, err := analyzeStdlibModule(ctx, in, patch, rel, i+1, len(paths))
+		result, err := analyzeStdlibModule(ctx, in, patch, rel, i+1, len(paths), explain)
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +422,7 @@ func scanStdlib(ctx context.Context, in Input, patches PatchSource, explain Expl
 	return finish(ctx, in, found, explain, notes)
 }
 
-func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel string, index, total int) (task.ModuleResult, error) {
+func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel string, index, total int, explain Explainer) (task.ModuleResult, error) {
 	goModPath := "./" + rel
 	absMod := filepath.Join(in.RepoPath, filepath.FromSlash(rel))
 	moduleDir := filepath.Dir(absMod)
@@ -487,7 +487,7 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 	verdict := withAssumed(verdictStdlibFiles(release.Toolchain, report.FoundPatchFiles), release)
 	verdict += attachReach(ctx, in.RepoPath, patch, &report)
 	result := task.ModuleResult{GoModPath: goModPath, Verdict: verdict, ReportMD: report}
-	result.Verdict += noteAppliedPatch(in.RepoPath, patch.Files, &result.ReportMD)
+	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return result, nil
 }
 
