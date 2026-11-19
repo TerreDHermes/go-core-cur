@@ -279,23 +279,26 @@ func freshTokensByLine(hunk diffHunk) [][]string {
 	return out
 }
 
-// meaningExcerpt is the function named in each unmatched hunk, or the
-// declarations above the first function when the hunk has no function name.
+// meaningExcerpt is the function named in each unmatched hunk. When that
+// function is already gone, the excerpt is the functions the hunk adds.
+// Declarations above the first function are used when the hunk names nothing
+// and adds no function.
 func meaningExcerpt(body []string, hunks []diffHunk, idxs []int) (string, []string) {
 	var spans [][2]int
 	needPrelude := false
 	for _, idx := range idxs {
-		fn, ok := parseFuncDecl(hunks[idx].header)
-		if !ok {
-			needPrelude = true
+		hunk := hunks[idx]
+		if fn, ok := parseFuncDecl(hunk.header); ok {
+			if start, end, found := funcSpanLines(body, fn); found {
+				spans = append(spans, [2]int{start, end})
+				continue
+			}
+		}
+		if added := addedFuncSpans(body, hunk); len(added) > 0 {
+			spans = append(spans, added...)
 			continue
 		}
-		start, end, found := funcSpanLines(body, fn)
-		if !found {
-			needPrelude = true
-			continue
-		}
-		spans = append(spans, [2]int{start, end})
+		needPrelude = true
 	}
 	if needPrelude {
 		if start, end, found := preludeSpan(body); found {
@@ -311,6 +314,32 @@ func meaningExcerpt(body []string, hunks []diffHunk, idxs []int) (string, []stri
 		lines = lines[:meaningExcerptLines]
 	}
 	return strings.Join(lines, "\n"), lines
+}
+
+// addedFuncSpans is every function the hunk introduces that the file has.
+func addedFuncSpans(body []string, hunk diffHunk) [][2]int {
+	var spans [][2]int
+	seen := map[string]bool{}
+	for _, line := range hunk.lines {
+		if !line.added {
+			continue
+		}
+		fn, ok := parseFuncDecl(line.text)
+		if !ok {
+			continue
+		}
+		label := funcLabel(fn)
+		if label == "" || seen[label] {
+			continue
+		}
+		seen[label] = true
+		start, end, found := funcSpanLines(body, fn)
+		if !found {
+			continue
+		}
+		spans = append(spans, [2]int{start, end})
+	}
+	return spans
 }
 
 func funcSpanLines(lines []string, fn namedFunc) (int, int, bool) {

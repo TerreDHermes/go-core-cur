@@ -659,8 +659,10 @@ const patchContextGap = 4
 // nearest unchanged line above and below nearby, so total++ does not match a
 // copy in another function. Indentation, blank lines and comments are ignored.
 // A removed line cancels a single edit only inside that window. When the hunk
-// holds several separate edits, the removed lines must be gone from the file.
-// A pure deletion is applied when the removed code is gone from the file.
+// holds several separate edits, a recognizable removed line must be gone from
+// the file. An ordinary line, such as a brace, return nil, or a short field,
+// cancels that hunk only when it still sits next to the insertion it belonged
+// to. A pure deletion is applied when the removed code is gone from the file.
 func hunkApplied(file []string, hunk diffHunk) bool {
 	got := codeLines(file)
 	runs, removed, ok := editRuns(hunk)
@@ -674,7 +676,7 @@ func hunkApplied(file []string, hunk diffHunk) bool {
 		run := runs[0]
 		return blockMatches(got, run.block, run.before, run.after, removed)
 	}
-	if removedLinesRemain(got, removed, runs) {
+	if removedLinesRemain(got, hunk, runs) {
 		return false
 	}
 	for _, run := range runs {
@@ -762,7 +764,13 @@ func runBetween(pieces []codePiece, first, last int, block []linePat) editRun {
 	return run
 }
 
-func removedLinesRemain(file, removed []string, runs []editRun) bool {
+// ordinaryRemovedIdents and ordinaryRemovedRunes bound a deleted line that is
+// too common to prove, on its own, that the old code is still in the file.
+// A string, a longer line, or more identifiers than this is recognizable.
+const ordinaryRemovedIdents = 4
+const ordinaryRemovedRunes = 40
+
+func removedLinesRemain(file []string, hunk diffHunk, runs []editRun) bool {
 	skip := map[string]bool{}
 	for _, run := range runs {
 		for _, line := range run.block {
@@ -771,15 +779,152 @@ func removedLinesRemain(file, removed []string, runs []editRun) bool {
 			}
 		}
 	}
-	for _, line := range removed {
-		if skip[line] {
+	for _, line := range codeLines(hunk.removed) {
+		if skip[line] || !distinctRemovedLine(line) {
 			continue
 		}
 		if containsContiguous(file, []string{line}) {
 			return true
 		}
 	}
+	beside := removedBesideRuns(hunk, len(runs), skip)
+	for i, lines := range beside {
+		if len(lines) == 0 {
+			continue
+		}
+		if !runClearOf(file, runs[i], lines) {
+			return true
+		}
+	}
 	return false
+}
+
+// distinctRemovedLine reports a deleted line that is evidence wherever it
+// still occurs. An import path and a long condition are. A brace, return nil,
+// or a short field is not.
+func distinctRemovedLine(line string) bool {
+	toks := tokenize(line)
+	if len(toks) == 0 {
+		return false
+	}
+	for _, tok := range toks {
+		if tok == "" {
+			continue
+		}
+		switch tok[0] {
+		case '"', '\'', '`':
+			return true
+		}
+	}
+	idents := 0
+	for _, tok := range toks {
+		if tok == "" || !isTokenIdent(tok[0]) || ordinaryWord(tok) {
+			continue
+		}
+		idents++
+	}
+	return idents > ordinaryRemovedIdents || len([]rune(line)) > ordinaryRemovedRunes
+}
+
+func ordinaryWord(tok string) bool {
+	switch tok {
+	case "if", "for", "return", "func", "var", "const", "type", "struct",
+		"interface", "map", "chan", "range", "switch", "case", "select",
+		"go", "defer", "else", "break", "continue", "nil", "true", "false",
+		"package", "import", "fallthrough", "goto":
+		return true
+	default:
+		return false
+	}
+}
+
+// removedBesideRuns lists ordinary deleted lines that sit against each run,
+// with no unchanged line between them and that run. A deleted line on the
+// other side of unchanged code belongs to neither run.
+func removedBesideRuns(hunk diffHunk, n int, skip map[string]bool) [][]string {
+	beside := make([][]string, n)
+	run := -1
+	inRun := false
+	var leading []string
+	for _, raw := range hunk.raw {
+		if raw == "" || strings.HasPrefix(raw, `\`) {
+			continue
+		}
+		switch raw[0] {
+		case '+':
+			if codeText(raw[1:]) == "" {
+				continue
+			}
+			if !inRun {
+				run++
+				inRun = true
+				if run < n && len(leading) > 0 {
+					beside[run] = append(beside[run], leading...)
+				}
+				leading = nil
+			}
+		case '-':
+			text := codeText(raw[1:])
+			if text == "" || skip[text] || distinctRemovedLine(text) {
+				continue
+			}
+			if inRun && run >= 0 && run < n {
+				beside[run] = append(beside[run], text)
+				continue
+			}
+			leading = append(leading, text)
+		case ' ':
+			if codeText(raw[1:]) == "" {
+				continue
+			}
+			inRun = false
+			leading = nil
+		}
+	}
+	return beside
+}
+
+// runClearOf reports that some copy of the run does not still have these
+// deleted lines next to it. A copy whose neighbors moved away does not count
+// as the old text remaining: an ordinary line elsewhere is a different place.
+// Every copy that still has its neighbors and the old line is the edit left
+// in place.
+func runClearOf(file []string, run editRun, removed []string) bool {
+	if len(run.block) == 0 || len(run.block) > len(file) {
+		return false
+	}
+	found := false
+	placed := false
+	for i := 0; i <= len(file)-len(run.block); i++ {
+		if !blockAt(file, i, run.block) {
+			continue
+		}
+		found = true
+		beforeAt, beforeOK := neighborAt(file, i, -1, run.before)
+		if !beforeOK {
+			continue
+		}
+		afterAt, afterOK := neighborAt(file, i+len(run.block), +1, run.after)
+		if !afterOK {
+			continue
+		}
+		placed = true
+		dirty := false
+		for _, line := range removed {
+			anchor := hunkAnchor{before: run.before, after: run.after, removed: []string{line}, span: len(run.block)}
+			if removedRemains(file, anchor, i, beforeAt, afterAt) {
+				dirty = true
+				break
+			}
+		}
+		if !dirty {
+			return true
+		}
+	}
+	if !found {
+		return false
+	}
+	return !placed
 }
 
 func blockFound(file []string, block []linePat) bool {

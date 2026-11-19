@@ -196,6 +196,59 @@ func TestMeaningKeepsTheLineCheckWhenTheModelFails(t *testing.T) {
 	}
 }
 
+func TestMeaningUsesAddedFunctionWhenHeaderIsGone(t *testing.T) {
+	root := t.TempDir()
+	rel := "internal/transport/controlbuf.go"
+	body := "" +
+		"package p\n\n" +
+		"import \"fmt\"\n\n" +
+		"func (l *loopyWriter) registerStreamHandler() {\n" +
+		"\tfmt.Println()\n" +
+		"}\n\n" +
+		"func (l *loopyWriter) serverHeaderHandler() {\n" +
+		"\tserverUniqueCall()\n" +
+		"}\n\n" +
+		"func (l *loopyWriter) clientHeaderHandler() {\n" +
+		"\tclientUniqueCall()\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	file := task.PatchFile{Filename: rel, Patch: "" +
+		"@@ func (l *loopyWriter) headerHandler\n" +
+		"- func (l *loopyWriter) headerHandler() {\n" +
+		"- \toldHeaderCall()\n" +
+		"+ func (l *loopyWriter) serverHeaderHandler() {\n" +
+		"+ \tserverUniqueCall()\n" +
+		"+ }\n" +
+		"+ func (l *loopyWriter) clientHeaderHandler() {\n" +
+		"+ \tclientUniqueCall()\n" +
+		" contextLine()\n" +
+		"+ missingUniqueCall()\n" +
+		" more()\n"}
+	matches := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	if status, line := assessPatchFile(root, file, matches); status != "partial" {
+		t.Fatal(status, line)
+	}
+	ai := &meaningAI{reply: func(prompt string) (string, error) {
+		code := prompt[strings.Index(prompt, "Код:\n")+len("Код:\n"):]
+		if strings.Contains(code, "import \"fmt\"") || strings.Contains(code, "registerStreamHandler") {
+			t.Fatal(prompt)
+		}
+		if !strings.Contains(code, "serverHeaderHandler") || !strings.Contains(code, "clientHeaderHandler") {
+			t.Fatal(prompt)
+		}
+		if !strings.Contains(code, "serverUniqueCall()") {
+			t.Fatal(prompt)
+		}
+		return "1: да | serverUniqueCall()", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	note := noteAppliedPatchReviewed(context.Background(), ai, root, []task.PatchFile{file}, &report)
+	if len(ai.prompts) != 1 || note == "" || report.PatchApplied == nil || !report.PatchApplied.Applied {
+		t.Fatal(len(ai.prompts), note, report.PatchCheck)
+	}
+}
+
 func TestMeaningWithoutAFunctionNameShowsOnlyThePrelude(t *testing.T) {
 	root := t.TempDir()
 	rel := "pkg/id.go"

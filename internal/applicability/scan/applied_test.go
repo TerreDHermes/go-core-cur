@@ -453,6 +453,95 @@ func TestSeparateAdditionsIgnoreNeighborOrder(t *testing.T) {
 	}
 }
 
+func TestOrdinaryRemovedLineInAnotherFunctionDoesNotCancel(t *testing.T) {
+	root := t.TempDir()
+	rel := "internal/transport/controlbuf.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ func (l *loopyWriter) registerStreamHandler\n" +
+		" func (l *loopyWriter) registerStreamHandler() {\n" +
+		" \tstr := &outStream{\n" +
+		"- \t\tid: h.streamID,\n" +
+		"+ \t\tid: hdr.streamID,\n" +
+		" \t\tstate: empty,\n" +
+		"- \t\twq: h.wq,\n" +
+		"+ \t\twq: hdr.wq,\n" +
+		" \t}\n" +
+		"+ \treturn nil\n" +
+		" }\n"
+	// The same short fields and return nil stay in another function.
+	body := "" +
+		"func (l *loopyWriter) registerStreamHandler() {\n" +
+		"\tstr := &outStream{\n" +
+		"\t\tid: h.streamID,\n" +
+		"\t\tstate: empty,\n" +
+		"\t\twq: h.wq,\n" +
+		"\t}\n" +
+		"\treturn nil\n" +
+		"}\n" +
+		"func (l *loopyWriter) clientHeaderHandler() {\n" +
+		"\tstr := &outStream{\n" +
+		"\t\tid: hdr.streamID,\n" +
+		"\t\tstate: empty,\n" +
+		"\t\twq: hdr.wq,\n" +
+		"\t}\n" +
+		"\treturn nil\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+
+	// The new field is in place, and the old one is still next to it.
+	beside := strings.Replace(body, "\t\tid: hdr.streamID,\n", "\t\tid: hdr.streamID,\n\t\tid: h.streamID,\n", 1)
+	mustWrite(t, filepath.Join(root, rel), beside)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+}
+
+func TestLongRemovedLineStillCancelsASplitHunk(t *testing.T) {
+	root := t.TempDir()
+	rel := "internal/transport/controlbuf.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ func Foo\n" +
+		" context()\n" +
+		"- if err := uniqueLongCondition(streamID, quota, peer); err != nil {\n" +
+		"+ if err := uniqueLongCondition(streamID, quota, peerChecked); err != nil {\n" +
+		" next()\n" +
+		"+ addedOtherCall()\n" +
+		" more()\n"
+	body := "" +
+		"func Foo() {\n" +
+		"\tcontext()\n" +
+		"\tif err := uniqueLongCondition(streamID, quota, peerChecked); err != nil {\n" +
+		"\t\tnext()\n" +
+		"\t\taddedOtherCall()\n" +
+		"\t\tmore()\n" +
+		"\t}\n" +
+		"}\n" +
+		"func Other() {\n" +
+		"\tif err := uniqueLongCondition(streamID, quota, peer); err != nil {\n" +
+		"\t\treturn\n" +
+		"\t}\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+
+	gone := strings.Replace(body, "\tif err := uniqueLongCondition(streamID, quota, peer); err != nil {\n\t\treturn\n\t}\n", "", 1)
+	mustWrite(t, filepath.Join(root, rel), gone)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+}
+
 func TestLineTailMayDifferAfterTheEdit(t *testing.T) {
 	root := t.TempDir()
 	rel := "src/net/http/server.go"
