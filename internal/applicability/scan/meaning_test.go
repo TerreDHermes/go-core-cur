@@ -225,6 +225,98 @@ func TestMeaningWithoutAFunctionNameShowsOnlyThePrelude(t *testing.T) {
 	}
 }
 
+func TestMeaningSkipsWhenThreeFilesMatchNothing(t *testing.T) {
+	root := t.TempDir()
+	files, matches := blankFiles(t, root, 3)
+	partial := halfMatchedFile(t, root)
+	files = append(files, partial.file)
+	matches = append(matches, partial.match)
+	ai := &meaningAI{reply: func(prompt string) (string, error) {
+		t.Fatal(prompt)
+		return "", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	note := noteAppliedPatchReviewed(context.Background(), ai, root, files, &report)
+	if len(ai.prompts) != 0 || note != "" || report.PatchApplied != nil {
+		t.Fatal(len(ai.prompts), note, report.PatchApplied)
+	}
+	if report.PatchCheck.Outcome != task.PatchCheckPartial {
+		t.Fatal(report.PatchCheck.Outcome)
+	}
+	if !strings.Contains(report.PatchCheck.Detail, "Смысловая сверка не запускалась") {
+		t.Fatal(report.PatchCheck.Detail)
+	}
+	joined := strings.Join(report.PatchCheck.Files, "\n")
+	if strings.Contains(joined, "подтвердила") || strings.Contains(joined, "не нашла") || strings.Contains(joined, "не прочитана") {
+		t.Fatal(joined)
+	}
+	if !strings.Contains(joined, "совпали 1 из 2 фрагментов") {
+		t.Fatal(joined)
+	}
+}
+
+func TestMeaningStillAsksWhenOnlyTwoFilesMatchNothing(t *testing.T) {
+	root := t.TempDir()
+	files, matches := blankFiles(t, root, 2)
+	absent := task.PatchFile{Filename: "pkg/missing.go", Patch: "" +
+		"@@ func Foo\n" +
+		" contextLine()\n" +
+		"+addedUniqueCall()\n" +
+		" more()\n"}
+	files = append(files, absent)
+	matches = append(matches, task.PatchFileMatch{Filename: absent.Filename, Found: false})
+	ai := &meaningAI{reply: func(string) (string, error) {
+		return "1: нет", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	noteAppliedPatchReviewed(context.Background(), ai, root, files, &report)
+	if len(ai.prompts) != 2 {
+		t.Fatal(len(ai.prompts), report.PatchCheck.Detail)
+	}
+	if strings.Contains(report.PatchCheck.Detail, "не запускалась") {
+		t.Fatal(report.PatchCheck.Detail)
+	}
+}
+
+func blankFiles(t *testing.T, root string, n int) ([]task.PatchFile, []task.PatchFileMatch) {
+	t.Helper()
+	var files []task.PatchFile
+	var matches []task.PatchFileMatch
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("pkg/blank%d.go", i)
+		call := fmt.Sprintf("blankUnique%d()", i)
+		mustWrite(t, filepath.Join(root, name), driftedBody(call))
+		files = append(files, driftedHunk(name, call))
+		matches = append(matches, task.PatchFileMatch{Filename: name, Found: true, Path: "./" + name})
+	}
+	return files, matches
+}
+
+func halfMatchedFile(t *testing.T, root string) struct {
+	file  task.PatchFile
+	match task.PatchFileMatch
+} {
+	t.Helper()
+	name := "pkg/half.go"
+	body := "package p\n\nfunc Foo() {\n\tcontextLine()\n\tkeptCall()\n\tmore()\n}\n\nfunc Bar() {\n\tcontextLine()\n\ta()\n\tb()\n\tc()\n\td()\n\te()\n\tf()\n\tmissedCall()\n\tmore()\n}\n"
+	mustWrite(t, filepath.Join(root, name), body)
+	file := task.PatchFile{Filename: name, Patch: "" +
+		"@@ func Foo\n" +
+		" contextLine()\n" +
+		"+keptCall()\n" +
+		" more()\n" +
+		"@@ func Bar\n" +
+		" contextLine()\n" +
+		"+missedCall()\n" +
+		" more()\n"}
+	return struct {
+		file  task.PatchFile
+		match task.PatchFileMatch
+	}{file: file, match: task.PatchFileMatch{Filename: name, Found: true, Path: "./" + name}}
+}
+
 func driftedHunk(name, added string) task.PatchFile {
 	return task.PatchFile{Filename: name, Patch: "" +
 		"@@ func Foo\n" +

@@ -15,6 +15,11 @@ import (
 // does not count, and the line check stays.
 const meaningExcerptLines = 800
 
+// meaningBlankFiles is how many code files with zero matched fragments
+// turn the model off for the whole patch. A file that matched some fragments
+// does not count, and neither does a file the line check did not score.
+const meaningBlankFiles = 3
+
 var meaningLineRE = regexp.MustCompile(`(?i)^\s*(\d+)\s*[:.)]\s*(да|нет)(?:\s*(?:\||—|–|-)\s*(.*))?$`)
 
 type meaningAnswer struct {
@@ -25,9 +30,15 @@ type meaningAnswer struct {
 // refinePatchCheck asks the model about each code file the line check left
 // short of a full match. One request carries every unmatched addition of that
 // file. Files that already match, and hunks that only edit a missing function,
-// are not sent.
+// are not sent. Three or more files with no matched fragment skip the model
+// for every file.
 func refinePatchCheck(ctx context.Context, explain Explainer, repoPath string, files []task.PatchFile, report *task.Report) *task.PatchCheck {
 	items := collectPatchItems(repoPath, files, report)
+	if blankPatchFiles(repoPath, files, report.PatchFiles) >= meaningBlankFiles {
+		check := summarizePatchItems(items)
+		check.Detail += " Смысловая сверка не запускалась: не совпал ни один фрагмент в трёх или больше файлах."
+		return check
+	}
 	for i, file := range files {
 		if items[i].status != "partial" || ctx.Err() != nil {
 			continue
@@ -35,6 +46,21 @@ func refinePatchCheck(ctx context.Context, explain Explainer, repoPath string, f
 		items[i] = reviewPartialFile(ctx, explain, repoPath, file, report.PatchFiles)
 	}
 	return summarizePatchItems(items)
+}
+
+// blankPatchFiles counts code files the line check scored and matched nothing in.
+func blankPatchFiles(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) int {
+	n := 0
+	for _, file := range files {
+		if ignoredPatchName(file.Filename) {
+			continue
+		}
+		got := inspectPatchFile(repoPath, file, matches)
+		if got.counted > 0 && got.matched == 0 {
+			n++
+		}
+	}
+	return n
 }
 
 func reviewPartialFile(ctx context.Context, explain Explainer, repoPath string, file task.PatchFile, matches []task.PatchFileMatch) patchItem {
