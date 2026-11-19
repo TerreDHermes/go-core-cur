@@ -171,6 +171,104 @@ func TestLaterCodeAfterThePatchDoesNotHideIt(t *testing.T) {
 	}
 }
 
+func TestShortAdditionNeedsNearbyContext(t *testing.T) {
+	root := t.TempDir()
+	rel := "fse/compress.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -10,7 +10,8 @@ func (s *Scratch) validateNorm() {\n" +
+		" \t\tif v >= 0 {\n" +
+		" \t\t\ttotal += int(v)\n" +
+		" \t\t} else {\n" +
+		"-\t\t\ttotal -= int(v)\n" +
+		"+\t\t\t// -1 takes one cell. Adding -v would let a wrapped -32768 pass.\n" +
+		"+\t\t\ttotal++\n" +
+		" \t\t}\n" +
+		" \t}\n"
+	// The fix is not in validateNorm. The same total++ already lives in another function.
+	body := "" +
+		"func (s *Scratch) validateNorm() {\n" +
+		"\tvar total int\n" +
+		"\tfor _, v := range s.norm[:s.symbolLen] {\n" +
+		"\t\tif v >= 0 {\n" +
+		"\t\t\ttotal += int(v)\n" +
+		"\t\t} else {\n" +
+		"\t\t\ttotal -= int(v)\n" +
+		"\t\t}\n" +
+		"\t}\n" +
+		"}\n" +
+		"\n" +
+		"func (s *Scratch) buildCTable() {\n" +
+		"\tsymbolTT[i].deltaFindState = int32(total - 1)\n" +
+		"\ttotal++\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+
+	// The new line is in the else, and the old line is still beside it.
+	kept := strings.Replace(body, "\t\t\ttotal -= int(v)\n", "\t\t\ttotal -= int(v)\n\t\t\ttotal++\n", 1)
+	mustWrite(t, filepath.Join(root, rel), kept)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+
+	// The old line is gone from that else. The other total++ does not matter.
+	fixed := strings.Replace(body, "\t\t\ttotal -= int(v)\n", "\t\t\ttotal++\n", 1)
+	mustWrite(t, filepath.Join(root, rel), fixed)
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+}
+
+func TestContextMayDriftByThreeLines(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	match := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	diff := "" +
+		"@@ -1,3 +1,4 @@\n" +
+		" func before() {\n" +
+		"+	added()\n" +
+		" }\n" +
+		" func after() {\n"
+	between := func(n int) string {
+		var b strings.Builder
+		b.WriteString("func before() {\n\tadded()\n")
+		for i := 0; i < n; i++ {
+			b.WriteString("\textra()\n")
+		}
+		b.WriteString("}\nfunc after() {\n}\n")
+		return b.String()
+	}
+	mustWrite(t, filepath.Join(root, rel), between(3))
+	status, line := assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+	mustWrite(t, filepath.Join(root, rel), between(4))
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: diff}, match)
+	if status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+
+	// Indent-only change is the same code and still counts as applied.
+	indent := "" +
+		"@@ -1,3 +1,3 @@\n" +
+		" func f() {\n" +
+		"-\treturn nil\n" +
+		"+\t\treturn nil\n" +
+		" }\n"
+	mustWrite(t, filepath.Join(root, rel), "func f() {\n\t\treturn nil\n}\n")
+	status, line = assessPatchFile(root, task.PatchFile{Filename: rel, Patch: indent}, match)
+	if status != "full" {
+		t.Fatal(status, line)
+	}
+}
+
 func TestPureDeletionUsesRemovedCode(t *testing.T) {
 	root := t.TempDir()
 	rel := "pkg/id.go"

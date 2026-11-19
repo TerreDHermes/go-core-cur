@@ -372,28 +372,41 @@ func parseHunks(diff string) ([]diffHunk, bool) {
 	return hunks, true
 }
 
+// patchContextGap is how many code lines around an added block are still
+// the same place. The neighbor from the hunk may sit up to three code
+// lines away; a matching statement further away is a different function.
+const patchContextGap = 4
+
 // hunkApplied reports whether the file already contains this hunk.
-// Added code must appear in order. Context that the hunk itself places
-// between those lines must stay with them. Context before the first added
-// line and after the last one may have drifted: a later edit in the same
-// block does not cancel the hunk. Indentation, blank lines and comments
-// are ignored. A pure deletion is applied when the removed code is gone.
+// Added code must appear in order, with the hunk's own context kept between
+// those lines. The nearest context line above and below must still be nearby,
+// so a short statement such as total++ does not match a copy in another
+// function. A few lines may sit between that neighbor and the new code.
+// Indentation, blank lines and comments are ignored. A removed line cancels
+// the match only when it is still in that same window. A pure deletion is
+// applied when the removed code is gone from the file.
 func hunkApplied(file []string, hunk diffHunk) bool {
 	got := codeLines(file)
-	if needle := addedNeedle(hunk.lines); len(needle) > 0 {
-		return containsContiguous(got, needle)
+	anchor := anchorFrom(hunk.lines, hunk.removed)
+	if len(anchor.added) > 0 {
+		return anchorMatches(got, anchor)
 	}
-	removed := codeLines(hunk.removed)
-	if len(removed) > 0 {
-		return !containsContiguous(got, removed)
+	if len(anchor.removed) > 0 {
+		return !containsContiguous(got, anchor.removed)
 	}
 	return true
 }
 
-// addedNeedle is the added code, plus any context the hunk puts between
-// those added lines. Context outside the added block is left out, so a
-// variable inserted after the patch does not hide the patch.
-func addedNeedle(lines []hunkLine) []string {
+type hunkAnchor struct {
+	before  string
+	added   []string
+	after   string
+	removed []string
+}
+
+// anchorFrom keeps the added code, the context the hunk places between those
+// lines, and one neighboring context line on each side.
+func anchorFrom(lines []hunkLine, removed []string) hunkAnchor {
 	type piece struct {
 		text  string
 		added bool
@@ -413,11 +426,119 @@ func addedNeedle(lines []hunkLine) []string {
 	for end > start && !pieces[end-1].added {
 		end--
 	}
-	out := make([]string, 0, end-start)
-	for _, piece := range pieces[start:end] {
-		out = append(out, piece.text)
+	anchor := hunkAnchor{removed: codeLines(removed)}
+	if start > 0 && start <= len(pieces) {
+		anchor.before = pieces[start-1].text
 	}
-	return out
+	if end < len(pieces) {
+		anchor.after = pieces[end].text
+	}
+	for _, piece := range pieces[start:end] {
+		anchor.added = append(anchor.added, piece.text)
+	}
+	return anchor
+}
+
+func anchorMatches(file []string, anchor hunkAnchor) bool {
+	needle := anchor.added
+	if len(needle) == 0 || len(needle) > len(file) {
+		return false
+	}
+	for i := 0; i <= len(file)-len(needle); i++ {
+		if !linesEqual(file[i:i+len(needle)], needle) {
+			continue
+		}
+		beforeAt, beforeOK := neighborAt(file, i, -1, anchor.before)
+		if !beforeOK {
+			continue
+		}
+		afterAt, afterOK := neighborAt(file, i+len(needle), +1, anchor.after)
+		if !afterOK {
+			continue
+		}
+		if removedRemains(file, anchor, i, beforeAt, afterAt) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// neighborAt finds want within patchContextGap code lines of origin.
+// dir -1 looks backward from the line before origin. dir +1 looks forward
+// from origin itself. An empty want means the hunk has no neighbor there.
+func neighborAt(file []string, origin, dir int, want string) (int, bool) {
+	if want == "" {
+		return -1, true
+	}
+	for step := 0; step < patchContextGap; step++ {
+		idx := origin + step
+		if dir < 0 {
+			idx = origin - 1 - step
+		}
+		if idx < 0 || idx >= len(file) {
+			return -1, false
+		}
+		if file[idx] == want {
+			return idx, true
+		}
+	}
+	return -1, false
+}
+
+// removedRemains reports the hunk's old code still sitting next to this
+// match. The same text inside the added lines is the new code, so an
+// indent-only change still counts as applied. An old copy outside the
+// window does not.
+func removedRemains(file []string, anchor hunkAnchor, addedAt, beforeAt, afterAt int) bool {
+	if len(anchor.removed) == 0 {
+		return false
+	}
+	lo := addedAt
+	hi := addedAt + len(anchor.added)
+	if anchor.before != "" {
+		lo = beforeAt + 1
+	} else {
+		lo = addedAt - patchContextGap
+		if lo < 0 {
+			lo = 0
+		}
+	}
+	if anchor.after != "" {
+		hi = afterAt
+	} else if end := hi + patchContextGap; end < len(file) {
+		hi = end
+	} else {
+		hi = len(file)
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(file) {
+		hi = len(file)
+	}
+	if lo > hi {
+		return false
+	}
+	spanLo := addedAt - lo
+	spanHi := addedAt + len(anchor.added) - lo
+	return containsOutside(file[lo:hi], anchor.removed, spanLo, spanHi)
+}
+
+func containsOutside(window, needle []string, spanLo, spanHi int) bool {
+	if len(needle) == 0 || len(needle) > len(window) {
+		return false
+	}
+	for i := 0; i <= len(window)-len(needle); i++ {
+		if !linesEqual(window[i:i+len(needle)], needle) {
+			continue
+		}
+		if i >= spanLo && i+len(needle) <= spanHi {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // codeLines keeps the code of each line. Indentation, repeated spaces,
