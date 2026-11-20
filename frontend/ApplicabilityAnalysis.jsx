@@ -27,8 +27,15 @@ const apiService = {
     return json;
   },
 
-  getTasks: async (limit = 10, offset = 0) => {
-    const res = await fetch(`${API_BASE}?limit=${limit}&offset=${offset}`);
+  getTasks: async (limit = 10, offset = 0, filter = {}) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (filter.url) params.set('component_url', filter.url);
+    if (filter.branch) params.set('branch', filter.branch);
+    if (filter.cveId) params.set('cve_id', filter.cveId);
+    if (filter.packageName) params.set('package_name', filter.packageName);
+    if (filter.status) params.set('status', filter.status);
+    if (filter.applicability) params.set('applicability', filter.applicability);
+    const res = await fetch(`${API_BASE}?${params}`);
     if (!res.ok) throw new Error('Failed to fetch tasks');
     const data = await res.json();
     return {
@@ -154,6 +161,27 @@ const formatDuration = (ms) => {
 };
 
 const showDuration = (status, ms) => status && status !== 'PENDING' && formatDuration(ms) !== '';
+
+const emptySearch = { url: '', branch: '', cveId: '', packageName: '', result: '' };
+
+const searchParams = (search) => {
+  const params = {};
+  if (!search) return params;
+  if (search.url) params.url = search.url;
+  if (search.branch) params.branch = search.branch;
+  if (search.cveId) params.cveId = search.cveId;
+  if (search.packageName) params.packageName = search.packageName;
+  if (search.result === 'PENDING' || search.result === 'RUNNING' || search.result === 'FAILED') {
+    params.status = search.result;
+  } else if (search.result) {
+    params.applicability = search.result;
+  }
+  return params;
+};
+
+const searchFilled = (search) => Boolean(
+  search && (search.url || search.branch || search.cveId || search.packageName || search.result)
+);
 
 const pillStyle = (colors) => ({
   display: 'inline-flex',
@@ -498,6 +526,10 @@ export default function ApplicabilityAnalysis() {
   const [currentPage, setCurrentPage] = useState(1);
   const [taskList, setTaskList] = useState([]);
   const [totalTasks, setTotalTasks] = useState(0);
+  const [searchDraft, setSearchDraft] = useState(emptySearch);
+  const [appliedSearch, setAppliedSearch] = useState(emptySearch);
+  const [searchSeq, setSearchSeq] = useState(0);
+  const [listError, setListError] = useState('');
   const itemsPerPage = 10;
 
   const [selectedModuleIndex, setSelectedModuleIndex] = useState(0);
@@ -527,18 +559,27 @@ export default function ApplicabilityAnalysis() {
 
   useEffect(() => {
     if (isListView) {
+      let cancelled = false;
       const loadList = async () => {
         try {
-          const data = await apiService.getTasks(itemsPerPage, (currentPage - 1) * itemsPerPage);
+          const data = await apiService.getTasks(
+            itemsPerPage,
+            (currentPage - 1) * itemsPerPage,
+            searchParams(appliedSearch)
+          );
+          if (cancelled) return;
           setTaskList(data.list || []);
           setTotalTasks(data.total || 0);
+          setListError('');
         } catch (err) {
-          console.error('Error loading list:', err);
+          if (!cancelled) setListError(err.message || 'Не удалось загрузить список');
         }
       };
       loadList();
+      return () => { cancelled = true; };
     }
-  }, [isListView, currentPage]);
+    return undefined;
+  }, [isListView, currentPage, appliedSearch, searchSeq]);
 
   useEffect(() => {
     if (isDetailView && taskId) {
@@ -1000,6 +1041,37 @@ export default function ApplicabilityAnalysis() {
 
   if (isListView) {
     const totalPages = Math.ceil(totalTasks / itemsPerPage) || 1;
+    const filtering = searchFilled(appliedSearch);
+    const runSearch = (event) => {
+      event.preventDefault();
+      setAppliedSearch({
+        url: searchDraft.url.trim(),
+        branch: searchDraft.branch.trim(),
+        cveId: searchDraft.cveId.trim(),
+        packageName: searchDraft.packageName.trim(),
+        result: searchDraft.result
+      });
+      setCurrentPage(1);
+      setSearchSeq((n) => n + 1);
+    };
+    const resetSearch = () => {
+      setSearchDraft(emptySearch);
+      setAppliedSearch(emptySearch);
+      setCurrentPage(1);
+      setSearchSeq((n) => n + 1);
+    };
+    const searchField = (name, label, placeholder) => (
+      <label style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', minWidth: 0 }}>
+        <span style={{ fontSize: '0.85rem', fontWeight: '700', color: theme.textMain }}>{label}</span>
+        <input
+          name={name}
+          value={searchDraft[name]}
+          placeholder={placeholder}
+          onChange={(e) => setSearchDraft({ ...searchDraft, [name]: e.target.value })}
+          style={{ border: `1px solid ${theme.border}`, borderRadius: '0.75rem', padding: '0.85rem 1rem', fontSize: '1rem', width: '100%', boxSizing: 'border-box', outline: 'none', backgroundColor: 'rgba(255,255,255,0.85)', color: theme.textMain }}
+        />
+      </label>
+    );
 
     return (
       <div style={fullPageStyle}>
@@ -1007,7 +1079,7 @@ export default function ApplicabilityAnalysis() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3rem', flexWrap: 'wrap', gap: '1.5rem' }}>
             <div>
               <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>Список анализов</h1>
-              <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>История проверок ({totalTasks} всего)</p>
+              <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>{filtering ? `Найдено ${totalTasks}` : `История проверок (${totalTasks} всего)`}</p>
             </div>
             <div style={navBtnGroupStyle}>
               <button onClick={() => window.location.href = '/analysis'} style={listNavBtnStyle} onMouseEnter={e => { e.currentTarget.style.backgroundColor = theme.primary; e.currentTarget.style.color = '#fff'; }} onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.color = theme.primary; }}>
@@ -1021,8 +1093,49 @@ export default function ApplicabilityAnalysis() {
             </div>
           </div>
 
+          <form onSubmit={runSearch} style={{ ...innerCardStyle, marginBottom: '1.5rem', padding: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.9rem', alignItems: 'end' }}>
+              {searchField('url', 'Репозиторий', 'grpc-go или полный адрес')}
+              {searchField('branch', 'Ветка', 'main')}
+              {searchField('cveId', 'CVE или алиас', 'CVE-2025-22869')}
+              {searchField('packageName', 'Пакет', 'root')}
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', minWidth: 0 }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: '700', color: theme.textMain }}>Статус</span>
+                <select
+                  value={searchDraft.result}
+                  onChange={(e) => setSearchDraft({ ...searchDraft, result: e.target.value })}
+                  style={{ border: `1px solid ${theme.border}`, borderRadius: '0.75rem', padding: '0.85rem 1rem', fontSize: '1rem', width: '100%', boxSizing: 'border-box', outline: 'none', backgroundColor: 'rgba(255,255,255,0.85)', color: theme.textMain }}
+                >
+                  <option value="">Любой</option>
+                  <option value="PENDING">В очереди</option>
+                  <option value="RUNNING">В работе</option>
+                  <option value="FAILED">Ошибка</option>
+                  <option value="applicable">Применима</option>
+                  <option value="not_applicable">Неприменима</option>
+                  <option value="uncertain">Неопределенно</option>
+                </select>
+              </label>
+              <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <button type="submit" style={{ ...listNavBtnStyle, backgroundColor: theme.primary, color: '#fff', borderColor: theme.primary, flex: 1 }}>
+                  Найти
+                </button>
+                {(searchFilled(searchDraft) || filtering) && (
+                  <button type="button" onClick={resetSearch} style={{ ...backBtnStyle, flex: 1 }}>
+                    Сбросить
+                  </button>
+                )}
+              </div>
+            </div>
+          </form>
+
+          {listError && (
+            <div style={{ ...innerCardStyle, marginBottom: '1.5rem', color: theme.error.text, backgroundColor: theme.error.bg, borderColor: theme.error.border }}>
+              {listError}
+            </div>
+          )}
+
           {taskList.length === 0 ? (
-            <div style={{ ...innerCardStyle, textAlign: 'center', padding: '5rem', color: theme.textMuted }}>Список пуст</div>
+            <div style={{ ...innerCardStyle, textAlign: 'center', padding: '5rem', color: theme.textMuted }}>{filtering ? 'Ничего не найдено' : 'Список пуст'}</div>
           ) : (
             <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>

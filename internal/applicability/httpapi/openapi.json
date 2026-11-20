@@ -262,7 +262,7 @@
         "tags": ["analysis"],
         "operationId": "listAnalyses",
         "summary": "Список задач",
-        "description": "Короткие карточки без вердикта и отчёта. `total` — сколько записей подходит под тот же фильтр `status`, без учёта `limit` и `offset`.",
+        "description": "Короткие карточки без вердикта и отчёта. `total` — сколько записей подходит под те же фильтры, без учёта `limit` и `offset`. Пустое поле условие не добавляет. `branch`, `cve_id` и `package_name` сравниваются целиком без учёта регистра. `component_url` ищется по вхождению. `applicability` берёт только завершённые анализы.",
         "parameters": [
           {
             "name": "limit",
@@ -279,8 +279,38 @@
           {
             "name": "status",
             "in": "query",
-            "description": "Необязательный фильтр по статусу.",
+            "description": "Необязательный фильтр по статусу задачи: PENDING, RUNNING, COMPLETED или FAILED.",
             "schema": { "$ref": "#/components/schemas/Status" }
+          },
+          {
+            "name": "component_url",
+            "in": "query",
+            "description": "Необязательный фильтр: адрес репозитория содержит эту строку, без учёта регистра.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "branch",
+            "in": "query",
+            "description": "Необязательный фильтр: ветка целиком, без учёта регистра.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "cve_id",
+            "in": "query",
+            "description": "Необязательный фильтр: CVE или алиас целиком, без учёта регистра.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "package_name",
+            "in": "query",
+            "description": "Необязательный фильтр: имя пакета целиком, без учёта регистра.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "applicability",
+            "in": "query",
+            "description": "Необязательный фильтр по вердикту завершённого анализа: applicable, not_applicable или uncertain. Упавшая задача не попадает.",
+            "schema": { "type": "string", "enum": ["applicable", "not_applicable", "uncertain"] }
           }
         ],
         "responses": {

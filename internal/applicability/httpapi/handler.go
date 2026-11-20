@@ -167,9 +167,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 	items, total, err := h.svc.List(r.Context(), tasksvc.ListFilter{
-		Status: task.Status(q.Get("status")),
-		Limit:  limit,
-		Offset: offset,
+		Status:        task.Status(q.Get("status")),
+		ComponentURL:  q.Get("component_url"),
+		Branch:        q.Get("branch"),
+		CVEID:         q.Get("cve_id"),
+		PackageName:   q.Get("package_name"),
+		Applicability: q.Get("applicability"),
+		Limit:         limit,
+		Offset:        offset,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)

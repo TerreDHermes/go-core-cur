@@ -24,6 +24,19 @@ func (s Status) Valid() bool {
 	}
 }
 
+// ListQuery is the optional filter for the analysis list.
+// Empty fields are not applied. Branch, CVEID and PackageName match the whole
+// value. ComponentURL matches any part of the stored address. Applicability
+// matches only a completed analysis: a failed task stores uncertain too.
+type ListQuery struct {
+	Status        Status
+	ComponentURL  string
+	Branch        string
+	CVEID         string
+	PackageName   string
+	Applicability string
+}
+
 type Task struct {
 	ID            string
 	Status        Status

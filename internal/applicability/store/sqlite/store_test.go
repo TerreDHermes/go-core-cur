@@ -74,7 +74,7 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	all, err := st.List(ctx, "", 10, 0)
+	all, err := st.List(ctx, task.ListQuery{}, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,21 +84,21 @@ func TestListOmitsHeavyFieldsAndOrdersByCreatedAt(t *testing.T) {
 	if all[0].ErrorMsg != "" || len(all[0].Modules) != 0 {
 		t.Fatalf("list leaked fields: %+v", all[0])
 	}
-	total, err := st.Count(ctx, "")
+	total, err := st.Count(ctx, task.ListQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if total != 2 {
 		t.Fatalf("total %d", total)
 	}
-	pendingCount, err := st.Count(ctx, task.StatusPending)
+	pendingCount, err := st.Count(ctx, task.ListQuery{Status: task.StatusPending})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pendingCount != 1 {
 		t.Fatalf("pending %d", pendingCount)
 	}
-	page, err := st.List(ctx, "", 1, 1)
+	page, err := st.List(ctx, task.ListQuery{}, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +210,92 @@ func TestRequeueRunningAndAIMetrics(t *testing.T) {
 	ok, err = st.Cancel(ctx, "wait", task.StoppedMessage, "2026-01-06T00:00:00Z")
 	if err != nil || ok {
 		t.Fatalf("second cancel ok %v err %v", ok, err)
+	}
+}
+
+func TestListSearchFilters(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	rows := []task.Task{
+		{ID: "grpc", Status: task.StatusPending, ComponentURL: "https://github.com/grpc/grpc-go.git", Branch: "main", CVEID: "CVE-1", PackageName: "root", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "other", Status: task.StatusPending, ComponentURL: "https://github.com/other/repo.git", Branch: "mainline", CVEID: "CVE-2", PackageName: "pkg", CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z"},
+		{ID: "hit", Status: task.StatusPending, ComponentURL: "https://github.com/grpc/grpc-go.git", Branch: "Main", CVEID: "cve-1", PackageName: "Root", CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z"},
+		{ID: "miss", Status: task.StatusPending, ComponentURL: "https://github.com/grpc/grpc-go.git", Branch: "dev", CVEID: "CVE-9", PackageName: "stdlib", CreatedAt: "2026-01-04T00:00:00Z", UpdatedAt: "2026-01-04T00:00:00Z"},
+	}
+	for _, item := range rows {
+		if err := st.Create(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish := func(id, kind, at string) {
+		t.Helper()
+		if _, err := st.Claim(ctx, id, at); err != nil {
+			t.Fatal(err)
+		}
+		err := st.Complete(ctx, id, []task.ModuleResult{{
+			GoModPath:     "go.mod",
+			Verdict:       kind,
+			Applicability: kind,
+			ReportMD:      task.Report{Applicability: kind},
+		}}, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish("hit", task.Applicable, "2026-01-03T00:00:01Z")
+	finish("miss", task.NotApplicable, "2026-01-04T00:00:01Z")
+	if _, err := st.Claim(ctx, "other", "2026-01-02T00:00:01Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Fail(ctx, "other", "clone failed", "2026-01-02T00:00:02Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	ids := func(q task.ListQuery) []string {
+		t.Helper()
+		got, err := st.List(ctx, q, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := st.Count(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != len(got) {
+			t.Fatalf("count %d list %d for %+v", n, len(got), q)
+		}
+		out := make([]string, len(got))
+		for i := range got {
+			out[i] = got[i].ID
+		}
+		return out
+	}
+	if got := ids(task.ListQuery{CVEID: "cve-1"}); len(got) != 2 || got[0] != "hit" || got[1] != "grpc" {
+		t.Fatalf("cve %v", got)
+	}
+	if got := ids(task.ListQuery{CVEID: "CVE"}); len(got) != 0 {
+		t.Fatalf("prefix %v", got)
+	}
+	if got := ids(task.ListQuery{ComponentURL: "grpc-go"}); len(got) != 3 || got[0] != "miss" {
+		t.Fatalf("url %v", got)
+	}
+	if got := ids(task.ListQuery{Branch: "MAIN"}); len(got) != 2 || got[0] != "hit" || got[1] != "grpc" {
+		t.Fatalf("branch %v", got)
+	}
+	if got := ids(task.ListQuery{PackageName: "root"}); len(got) != 2 || got[0] != "hit" {
+		t.Fatalf("package %v", got)
+	}
+	if got := ids(task.ListQuery{ComponentURL: "grpc-go", CVEID: "CVE-9"}); len(got) != 1 || got[0] != "miss" {
+		t.Fatalf("combined %v", got)
+	}
+	if got := ids(task.ListQuery{Applicability: task.Applicable}); len(got) != 1 || got[0] != "hit" {
+		t.Fatalf("applicable %v", got)
+	}
+	if got := ids(task.ListQuery{Applicability: task.Uncertain}); len(got) != 0 {
+		t.Fatalf("uncertain includes failed %v", got)
+	}
+	if got := ids(task.ListQuery{Status: task.StatusFailed}); len(got) != 1 || got[0] != "other" {
+		t.Fatalf("failed %v", got)
 	}
 }
 

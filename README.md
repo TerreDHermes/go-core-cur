@@ -78,7 +78,7 @@ curl -s -X POST localhost:8741/api/v1/analysis \
   -d '{"component_url":"https://github.com/golang/example","branch":"master","cve_id":"CVE-2024-0001","package_name":"example"}'
 ```
 
-`GET /api/v1/analysis?limit=10&offset=0&status=PENDING` — `{"items":[...],"total":N}`. В `items` нет `verdict` и `report_md`. У каждой задачи есть `duration_ms` и `applicability`. `total` — сколько таких записей в базе под тем же фильтром `status` (без фильтра — все задачи), без учёта `limit` и `offset`.
+`GET /api/v1/analysis?limit=10&offset=0&status=PENDING` — `{"items":[...],"total":N}`. В `items` нет `verdict` и `report_md`. У каждой задачи есть `duration_ms` и `applicability`. `total` — сколько таких записей в базе под тем же фильтром, без учёта `limit` и `offset`. Кроме `status` в запрос можно передать `component_url`, `branch`, `cve_id`, `package_name` и `applicability`. Пустое поле условие не добавляет. `branch`, `cve_id` и `package_name` сравниваются целиком, без учёта регистра. `component_url` ищется по вхождению, тоже без учёта регистра. `applicability` — `applicable`, `not_applicable` или `uncertain`, и только у завершённого анализа: упавшая задача в эту выборку не входит. Неизвестное значение даёт `400`.
 
 `duration_ms` — сколько миллисекунд шёл сам анализ, без ожидания в очереди. Старт пишется, когда воркер берёт задачу. Для завершённой, упавшей и остановленной задачи конец — `updated_at`. Пока задача `RUNNING`, это текущее время минус старт. Пока она `PENDING`, поле `null`. У задач, созданных до появления старта, остаётся прежняя разница `updated_at` минус `created_at`.
 

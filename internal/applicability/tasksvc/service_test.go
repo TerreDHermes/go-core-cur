@@ -20,6 +20,19 @@ func (q *recordingQueue) Enqueue(_ context.Context, id string) error {
 	return nil
 }
 
+func TestListRejectsUnknownApplicability(t *testing.T) {
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := New(st, &recordingQueue{})
+	_, _, err = svc.List(context.Background(), ListFilter{Applicability: "started"})
+	if !errors.Is(err, task.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenReusesLatestOrCreates(t *testing.T) {
 	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

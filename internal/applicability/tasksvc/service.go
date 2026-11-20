@@ -34,9 +34,14 @@ func New(st store.Store, queue Enqueuer) *Service {
 }
 
 type ListFilter struct {
-	Status task.Status
-	Limit  int
-	Offset int
+	Status        task.Status
+	ComponentURL  string
+	Branch        string
+	CVEID         string
+	PackageName   string
+	Applicability string
+	Limit         int
+	Offset        int
 }
 
 func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, error) {
@@ -127,8 +132,9 @@ func normalizeKey(in task.CreateInput) (task.CreateInput, error) {
 }
 
 func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, int, error) {
-	if f.Status != "" && !f.Status.Valid() {
-		return nil, 0, fmt.Errorf("%w: %s", task.ErrInvalidStatus, f.Status)
+	q, err := normalizeList(f)
+	if err != nil {
+		return nil, 0, err
 	}
 	if f.Limit <= 0 {
 		f.Limit = 10
@@ -139,15 +145,35 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]task.Task, int, err
 	if f.Offset < 0 {
 		return nil, 0, fmt.Errorf("%w: offset must be >= 0", task.ErrInvalidInput)
 	}
-	items, err := s.store.List(ctx, f.Status, f.Limit, f.Offset)
+	items, err := s.store.List(ctx, q, f.Limit, f.Offset)
 	if err != nil {
 		return nil, 0, err
 	}
-	total, err := s.store.Count(ctx, f.Status)
+	total, err := s.store.Count(ctx, q)
 	if err != nil {
 		return nil, 0, err
 	}
 	return items, total, nil
+}
+
+func normalizeList(f ListFilter) (task.ListQuery, error) {
+	q := task.ListQuery{
+		Status:        task.Status(strings.TrimSpace(string(f.Status))),
+		ComponentURL:  strings.TrimSpace(f.ComponentURL),
+		Branch:        strings.TrimSpace(f.Branch),
+		CVEID:         strings.TrimSpace(f.CVEID),
+		PackageName:   strings.TrimSpace(f.PackageName),
+		Applicability: strings.ToLower(strings.TrimSpace(f.Applicability)),
+	}
+	if q.Status != "" && !q.Status.Valid() {
+		return task.ListQuery{}, fmt.Errorf("%w: %s", task.ErrInvalidStatus, q.Status)
+	}
+	switch q.Applicability {
+	case "", task.Applicable, task.NotApplicable, task.Uncertain:
+	default:
+		return task.ListQuery{}, fmt.Errorf("%w: applicability", task.ErrInvalidInput)
+	}
+	return q, nil
 }
 
 func (s *Service) Get(ctx context.Context, id string) (task.Task, error) {

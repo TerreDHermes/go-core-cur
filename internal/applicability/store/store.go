@@ -19,7 +19,7 @@ type Store interface {
 	RequeueRunning(ctx context.Context, updatedAt string) ([]string, error)
 	Get(ctx context.Context, id string) (task.Task, error)
 	LatestID(ctx context.Context, componentURL, branch, cveID, packageName string) (string, error)
-	List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error)
-	Count(ctx context.Context, status task.Status) (int, error)
+	List(ctx context.Context, q task.ListQuery, limit, offset int) ([]task.Task, error)
+	Count(ctx context.Context, q task.ListQuery) (int, error)
 	ListPendingIDs(ctx context.Context) ([]string, error)
 }

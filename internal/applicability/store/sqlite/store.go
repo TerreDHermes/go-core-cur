@@ -331,20 +331,15 @@ func (s *Store) LatestID(ctx context.Context, componentURL, branch, cveID, packa
 	return id, nil
 }
 
-func (s *Store) List(ctx context.Context, status task.Status, limit, offset int) ([]task.Task, error) {
+func (s *Store) List(ctx context.Context, query task.ListQuery, limit, offset int) ([]task.Task, error) {
+	where, args := listWhere(query)
 	q := `
 		SELECT id, status, component_url, branch, cve_id, package_name,
 		       '', created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
 		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms,
 		       go_mod_count, COALESCE(stop_stage, '')
-		FROM analysis_tasks`
-	var args []any
-	if status != "" {
-		q += ` WHERE status = ?`
-		args = append(args, string(status))
-	}
-	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+		FROM analysis_tasks` + where + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -367,18 +362,51 @@ func (s *Store) List(ctx context.Context, status task.Status, limit, offset int)
 	return out, rows.Err()
 }
 
-func (s *Store) Count(ctx context.Context, status task.Status) (int, error) {
-	q := `SELECT COUNT(*) FROM analysis_tasks`
-	var args []any
-	if status != "" {
-		q += ` WHERE status = ?`
-		args = append(args, string(status))
-	}
+func (s *Store) Count(ctx context.Context, query task.ListQuery) (int, error) {
+	where, args := listWhere(query)
+	q := `SELECT COUNT(*) FROM analysis_tasks` + where
 	var n int
 	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count tasks: %w", err)
 	}
 	return n, nil
+}
+
+// listWhere builds the shared filter for List and Count.
+// A verdict filter also requires a completed task, so a failed analysis
+// stored as uncertain does not appear under that verdict.
+func listWhere(q task.ListQuery) (string, []any) {
+	var conds []string
+	var args []any
+	if q.Status != "" {
+		conds = append(conds, "status = ?")
+		args = append(args, string(q.Status))
+	}
+	if q.ComponentURL != "" {
+		conds = append(conds, "instr(lower(component_url), lower(?)) > 0")
+		args = append(args, q.ComponentURL)
+	}
+	if q.Branch != "" {
+		conds = append(conds, "lower(branch) = lower(?)")
+		args = append(args, q.Branch)
+	}
+	if q.CVEID != "" {
+		conds = append(conds, "lower(cve_id) = lower(?)")
+		args = append(args, q.CVEID)
+	}
+	if q.PackageName != "" {
+		conds = append(conds, "lower(package_name) = lower(?)")
+		args = append(args, q.PackageName)
+	}
+	if q.Applicability != "" {
+		conds = append(conds, "status = 'COMPLETED'")
+		conds = append(conds, "lower(COALESCE(applicability, '')) = lower(?)")
+		args = append(args, q.Applicability)
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
 func (s *Store) ListPendingIDs(ctx context.Context) ([]string, error) {
