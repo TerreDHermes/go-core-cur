@@ -29,7 +29,13 @@ func TestMeaningConfirmsADriftedAddition(t *testing.T) {
 		if !strings.Contains(prompt, "func Foo()") {
 			t.Fatalf("function body missing:\n%s", prompt)
 		}
-		return "1: да | addedUniqueCall()", nil
+		if !strings.Contains(prompt, "попытка внести этот патч") || !strings.Contains(prompt, "Сомнение — это «да»") {
+			t.Fatalf("prompt:\n%s", prompt)
+		}
+		if strings.Contains(prompt, "Другой способ") {
+			t.Fatalf("prompt:\n%s", prompt)
+		}
+		return "да | addedUniqueCall()", nil
 	}}
 	yes := true
 	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
@@ -58,9 +64,8 @@ func TestMeaningRejectsAQuoteOutsideTheExcerpt(t *testing.T) {
 	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
 
 	for _, reply := range []string{
-		"1: да | notInThisFile()",
-		"1: да | contextLine()",
-		"1: нет",
+		"да | notInThisFile()",
+		"нет",
 		"не знаю",
 	} {
 		ai := &meaningAI{reply: func(string) (string, error) { return reply, nil }}
@@ -273,8 +278,59 @@ func TestMeaningWithoutAFunctionNameShowsOnlyThePrelude(t *testing.T) {
 	if note != "" || report.PatchCheck.Outcome != task.PatchCheckPartial {
 		t.Fatal(note, report.PatchCheck)
 	}
-	if !strings.Contains(strings.Join(report.PatchCheck.Files, "\n"), "не нашла") {
+	if !strings.Contains(strings.Join(report.PatchCheck.Files, "\n"), "не увидела попытку") {
 		t.Fatal(report.PatchCheck.Files)
+	}
+}
+
+func TestMeaningCountsAPartialAttempt(t *testing.T) {
+	root := t.TempDir()
+	rel := "pkg/id.go"
+	body := "" +
+		"package p\n\n" +
+		"func Foo() {\n" +
+		"\tcontextLine()\n" +
+		"\ta()\n\tb()\n\tc()\n\td()\n\te()\n\tf()\n" +
+		"\tadaptedAttempt()\n" +
+		"\tmore()\n" +
+		"}\n\n" +
+		"func Bar() {\n" +
+		"\tcontextLine()\n" +
+		"\ta()\n\tb()\n\tc()\n\td()\n\te()\n\tf()\n" +
+		"\tunrelatedCall()\n" +
+		"\tmore()\n" +
+		"}\n"
+	mustWrite(t, filepath.Join(root, rel), body)
+	file := task.PatchFile{Filename: rel, Patch: "" +
+		"@@ func Foo\n" +
+		" contextLine()\n" +
+		"+addedUniqueCall()\n" +
+		" more()\n" +
+		"@@ func Bar\n" +
+		" contextLine()\n" +
+		"+otherUniqueCall()\n" +
+		" more()\n"}
+	matches := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	if status, line := assessPatchFile(root, file, matches); status != "partial" || !strings.Contains(line, "0 из 2") {
+		t.Fatal(status, line)
+	}
+	ai := &meaningAI{reply: func(prompt string) (string, error) {
+		if strings.Contains(prompt, "совпали") || strings.Contains(prompt, "0 из") {
+			t.Fatal(prompt)
+		}
+		if !strings.Contains(prompt, "addedUniqueCall()") || !strings.Contains(prompt, "otherUniqueCall()") {
+			t.Fatal(prompt)
+		}
+		return "да | adaptedAttempt()", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	note := noteAppliedPatchReviewed(context.Background(), ai, root, []task.PatchFile{file}, &report)
+	if len(ai.prompts) != 1 || note == "" || report.PatchApplied == nil || !report.PatchApplied.Applied {
+		t.Fatal(len(ai.prompts), note, report.PatchCheck)
+	}
+	if report.PatchCheck.Outcome != task.PatchCheckFull {
+		t.Fatal(report.PatchCheck.Outcome, report.PatchCheck.Files)
 	}
 }
 
@@ -301,7 +357,7 @@ func TestMeaningSkipsWhenThreeFilesMatchNothing(t *testing.T) {
 		t.Fatal(report.PatchCheck.Detail)
 	}
 	joined := strings.Join(report.PatchCheck.Files, "\n")
-	if strings.Contains(joined, "подтвердила") || strings.Contains(joined, "не нашла") || strings.Contains(joined, "не прочитана") {
+	if strings.Contains(joined, "подтвердила") || strings.Contains(joined, "не увидела") || strings.Contains(joined, "не прочитана") {
 		t.Fatal(joined)
 	}
 	if !strings.Contains(joined, "совпали 1 из 2 фрагментов") {

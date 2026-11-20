@@ -20,7 +20,7 @@ const meaningExcerptLines = 800
 // does not count, and neither does a file the line check did not score.
 const meaningBlankFiles = 3
 
-var meaningLineRE = regexp.MustCompile(`(?i)^\s*(\d+)\s*[:.)]\s*(да|нет)(?:\s*(?:\||—|–|-)\s*(.*))?$`)
+var meaningLineRE = regexp.MustCompile(`(?i)^(?:\d+\s*[:.)]\s*)?(да|нет)(?:\s*(?:\||—|–|-)\s*(.*))?$`)
 
 type meaningAnswer struct {
 	yes   bool
@@ -28,10 +28,12 @@ type meaningAnswer struct {
 }
 
 // refinePatchCheck asks the model about each code file the line check left
-// short of a full match. One request carries every unmatched addition of that
-// file. Files that already match, and hunks that only edit a missing function,
-// are not sent. Three or more files with no matched fragment skip the model
-// for every file.
+// short of a full match. One request asks whether this file shows an attempt
+// to land the patch. A yes that quotes a line from the excerpt counts the
+// whole file, even when some fragments are missing. Files that already match,
+// and hunks that only edit a missing function, are not sent. Three or more
+// files with no matched fragment skip the model for every file. One or two
+// such files are still asked.
 func refinePatchCheck(ctx context.Context, explain Explainer, repoPath string, files []task.PatchFile, report *task.Report) *task.PatchCheck {
 	items := collectPatchItems(repoPath, files, report)
 	if blankPatchFiles(repoPath, files, report.PatchFiles) >= meaningBlankFiles {
@@ -96,29 +98,20 @@ func reviewPartialFile(ctx context.Context, explain Explainer, repoPath string, 
 		item.line += ". Смысловая сверка не прочитана"
 		return item
 	}
-	confirmed := 0
-	for n, idx := range send {
-		ans, ok := answers[n+1]
-		if !ok || !ans.yes {
-			continue
+	seen := false
+	for _, ans := range answers {
+		if ans.yes && quoteInExcerpt(excerptLines, ans.quote) {
+			seen = true
+			break
 		}
-		if !quoteInExcerpt(excerptLines, ans.quote) || !quoteShowsAddition(got.hunks[idx], ans.quote) {
-			continue
-		}
-		confirmed++
 	}
-	if confirmed == 0 {
-		item.line += ". Смысловая сверка не нашла оставшиеся фрагменты в коде"
+	if !seen {
+		item.line += ". Смысловая сверка не увидела попытку внести патч"
 		return item
 	}
-	got.matched += confirmed
-	status, line := patchedFileLine(file.Filename, got.matched, got.counted, got.ignored)
-	if got.matched == got.counted {
-		line += ". Смысловая сверка подтвердила фрагменты, которые построчное сравнение не зачло"
-	} else {
-		line += fmt.Sprintf(". Смысловая сверка подтвердила ещё %d", confirmed)
-	}
-	return patchItem{name: file.Filename, status: status, line: line}
+	_, line := patchedFileLine(file.Filename, got.counted, got.counted, got.ignored)
+	line += ". Смысловая сверка увидела попытку внести патч, которую построчное сравнение не зачло"
+	return patchItem{name: file.Filename, status: "full", line: line}
 }
 
 func hunkAddsCode(hunk diffHunk) bool {
@@ -131,16 +124,16 @@ func hunkAddsCode(hunk diffHunk) bool {
 }
 
 func meaningPrompt(filename, hunksText, code string) string {
-	return fmt.Sprintf(`Для каждого фрагмента реши, есть ли эта правка в коде ниже.
+	return fmt.Sprintf(`Посмотри на правки и на код. Реши, была ли попытка внести этот патч.
 
-Порядок строк не важен. Отступы, пустые строки и комментарии не важны. Соседние строки могут стоять иначе. Хвост строки, который правка не меняла, может называться иначе. Это всё та же правка.
-Другой способ закрыть ту же ошибку этой правкой не считается.
+Не каждый фрагмент обязан присутствовать. Имена могут быть другими: код уже могли менять предыдущие патчи. Порядок строк, отступы, пустые строки и комментарии не важны. Соседние строки могут стоять иначе. Сомнение — это «да»: похожая правка считается попыткой внести этот патч.
+«Нет» — только когда попытки не видно совсем.
 
-Ответ — по одной строке на фрагмент и ничего больше:
-1: да | строка из кода, в которой правка видна
-1: нет
+Ответ — одна строка и ничего больше:
+да | строка из кода, где видна попытка
+нет
 
-Номер — номер фрагмента. Для «да» после вертикальной черты приведи строку из приведённого кода. Без этой строки ответ не принимается.
+Для «да» после вертикальной черты приведи строку из приведённого кода. Без этой строки ответ не принимается.
 
 Файл: %s
 
@@ -170,8 +163,8 @@ func renderAskedHunks(hunks []diffHunk, idxs []int) string {
 	return b.String()
 }
 
-func parseMeaning(text string) map[int]meaningAnswer {
-	out := map[int]meaningAnswer{}
+func parseMeaning(text string) []meaningAnswer {
+	var out []meaningAnswer
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.Trim(line, "`")
@@ -179,16 +172,9 @@ func parseMeaning(text string) map[int]meaningAnswer {
 		if m == nil {
 			continue
 		}
-		n := 0
-		for _, c := range m[1] {
-			n = n*10 + int(c-'0')
-		}
-		if n <= 0 {
-			continue
-		}
-		quote := strings.TrimSpace(m[3])
+		quote := strings.TrimSpace(m[2])
 		quote = strings.Trim(quote, "`")
-		out[n] = meaningAnswer{yes: strings.EqualFold(m[2], "да"), quote: strings.TrimSpace(quote)}
+		out = append(out, meaningAnswer{yes: strings.EqualFold(m[1], "да"), quote: strings.TrimSpace(quote)})
 	}
 	return out
 }
@@ -215,68 +201,6 @@ func quoteInExcerpt(lines []string, quote string) bool {
 
 func compact(s string) string {
 	return strings.Join(strings.Fields(s), "")
-}
-
-// quoteShowsAddition requires every newly inserted token of one added line
-// to sit in the quote. A neighboring line the patch did not change does not pass.
-func quoteShowsAddition(hunk diffHunk, quote string) bool {
-	got := map[string]bool{}
-	for _, tok := range tokenize(codeText(quote)) {
-		got[tok] = true
-	}
-	for _, fresh := range freshTokensByLine(hunk) {
-		if len(fresh) == 0 {
-			continue
-		}
-		all := true
-		for _, tok := range fresh {
-			if !got[tok] {
-				all = false
-				break
-			}
-		}
-		if all {
-			return true
-		}
-	}
-	return false
-}
-
-func freshTokensByLine(hunk diffHunk) [][]string {
-	var added [][]string
-	for _, line := range hunk.lines {
-		if !line.added {
-			continue
-		}
-		text := codeText(line.text)
-		if text == "" {
-			continue
-		}
-		added = append(added, tokenize(text))
-	}
-	if len(added) == 0 {
-		return nil
-	}
-	keep := insertedTokens(codeLines(hunk.removed), added)
-	var out [][]string
-	pos := 0
-	for _, toks := range added {
-		if pos+len(toks) > len(keep) {
-			break
-		}
-		var fresh []string
-		lineKeep := keep[pos : pos+len(toks)]
-		pos += len(toks)
-		for i, tok := range toks {
-			if !lineKeep[i] {
-				fresh = append(fresh, tok)
-			}
-		}
-		if len(fresh) > 0 {
-			out = append(out, fresh)
-		}
-	}
-	return out
 }
 
 // meaningExcerpt is the function named in each unmatched hunk. When that
