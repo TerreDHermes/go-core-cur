@@ -52,6 +52,25 @@ const apiService = {
 
   downloadReportUrl: (id) => `${API_BASE}/${id}/report`,
 
+  saveReview: async (id, data) => {
+    const res = await fetch(`${API_BASE}/${id}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating: data.rating, review: data.review || '' })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `Ошибка сервера (${res.status})`);
+    return json;
+  },
+
+  getReviews: async (limit = 10, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    const res = await fetch(`${API_BASE}/reviews?${params}`);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || 'Не удалось загрузить отзывы');
+    return json;
+  },
+
   stopTask: async (id) => {
     const res = await fetch(`${API_BASE}/${id}/cancel`, { method: 'POST' });
     const json = await res.json().catch(() => ({}));
@@ -453,33 +472,70 @@ function ErrorDetails({ task }) {
   );
 }
 
+const quietLinkStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '0.45rem 0.85rem',
+  borderRadius: '0.65rem',
+  border: `1px solid ${theme.primary}`,
+  background: '#FFFFFF',
+  color: theme.primary,
+  fontSize: '0.9rem',
+  fontWeight: '700',
+  lineHeight: 1.2,
+  textDecoration: 'none',
+  whiteSpace: 'nowrap'
+};
+
+function paintQuietLink(node, active) {
+  node.style.backgroundColor = active ? theme.primary : '#fff';
+  node.style.color = active ? '#fff' : theme.primary;
+}
+
 function SwaggerButton() {
   return (
     <a
       href="/api/v1/analysis/docs/"
       target="_blank"
       rel="noreferrer"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '0.45rem 0.85rem',
-        borderRadius: '0.65rem',
-        border: `1px solid ${theme.primary}`,
-        background: '#FFFFFF',
-        color: theme.primary,
-        fontSize: '0.9rem',
-        fontWeight: '700',
-        lineHeight: 1.2,
-        textDecoration: 'none',
-        whiteSpace: 'nowrap'
-      }}
-      onMouseEnter={e => { e.currentTarget.style.backgroundColor = theme.primary; e.currentTarget.style.color = '#fff'; }}
-      onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.color = theme.primary; }}
+      style={quietLinkStyle}
+      onMouseEnter={e => paintQuietLink(e.currentTarget, true)}
+      onMouseLeave={e => paintQuietLink(e.currentTarget, false)}
     >
       Swagger UI
     </a>
   );
+}
+
+function StarRow({ value, onPick, size = 22 }) {
+  return (
+    <span style={{ display: 'inline-flex', gap: '0.12rem', alignItems: 'center' }}>
+      {[1, 2, 3, 4, 5].map((n) => {
+        const mark = <span style={{ color: n <= (value || 0) ? '#F59E0B' : '#CBD5E1', fontSize: size, lineHeight: 1 }}>★</span>;
+        if (!onPick) return <span key={n}>{mark}</span>;
+        return (
+          <button
+            key={n}
+            type="button"
+            aria-label={`${n} из 5`}
+            onClick={() => onPick(value === n ? 0 : n)}
+            style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', lineHeight: 1 }}
+          >
+            {mark}
+          </button>
+        );
+      })}
+    </span>
+  );
+}
+
+function formatAverage(value) {
+  if (value == null || value === '') return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  const rounded = Math.round(n * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
 function displayGoVersion(raw) {
@@ -530,6 +586,16 @@ export default function ApplicabilityAnalysis() {
   const [appliedSearch, setAppliedSearch] = useState(emptySearch);
   const [searchSeq, setSearchSeq] = useState(0);
   const [listError, setListError] = useState('');
+  const [reviewDraft, setReviewDraft] = useState({ rating: 0, text: '' });
+  const [reviewError, setReviewError] = useState('');
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const reviewSeed = useRef('');
+  const [reviewPage, setReviewPage] = useState(1);
+  const [reviewItems, setReviewItems] = useState([]);
+  const [reviewTotal, setReviewTotal] = useState(0);
+  const [reviewAverage, setReviewAverage] = useState(null);
+  const [reviewRated, setReviewRated] = useState(0);
+  const [reviewListError, setReviewListError] = useState('');
   const itemsPerPage = 10;
 
   const [selectedModuleIndex, setSelectedModuleIndex] = useState(0);
@@ -538,11 +604,12 @@ export default function ApplicabilityAnalysis() {
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState('');
 
-  const isDetailView = !!taskId;
-  const isListView = location.pathname.includes('/list');
+  const isReviewsView = location.pathname.includes('/reviews');
+  const isListView = !isReviewsView && location.pathname.includes('/list');
+  const isDetailView = !!taskId && !isListView && !isReviewsView;
 
   useEffect(() => {
-    if (isDetailView || isListView) return undefined;
+    if (isDetailView || isListView || isReviewsView) return undefined;
     let cancelled = false;
     apiService.getDefaultModel()
       .then((model) => {
@@ -555,7 +622,7 @@ export default function ApplicabilityAnalysis() {
       })
       .catch((err) => console.error('Error loading Go version:', err));
     return () => { cancelled = true; };
-  }, [isDetailView, isListView]);
+  }, [isDetailView, isListView, isReviewsView]);
 
   useEffect(() => {
     if (isListView) {
@@ -601,6 +668,67 @@ export default function ApplicabilityAnalysis() {
       return () => clearInterval(interval);
     }
   }, [isDetailView, taskId]);
+
+  useEffect(() => {
+    if (!currentTask || currentTask.id !== taskId) return;
+    if (reviewSeed.current === currentTask.id) return;
+    reviewSeed.current = currentTask.id;
+    setReviewDraft({ rating: currentTask.rating || 0, text: currentTask.review || '' });
+    setReviewError('');
+  }, [currentTask, taskId]);
+
+  useEffect(() => {
+    if (!isReviewsView) return undefined;
+    let cancelled = false;
+    const loadReviews = async () => {
+      try {
+        const data = await apiService.getReviews(itemsPerPage, (reviewPage - 1) * itemsPerPage);
+        if (cancelled) return;
+        setReviewItems(data.items || []);
+        setReviewTotal(data.total || 0);
+        setReviewAverage(data.average);
+        setReviewRated(data.rated || 0);
+        setReviewListError('');
+      } catch (err) {
+        if (!cancelled) setReviewListError(err.message || 'Не удалось загрузить отзывы');
+      }
+    };
+    loadReviews();
+    return () => { cancelled = true; };
+  }, [isReviewsView, reviewPage]);
+
+  const handleSaveReview = async () => {
+    if (!currentTask) return;
+    setReviewSaving(true);
+    setReviewError('');
+    try {
+      const saved = await apiService.saveReview(currentTask.id, {
+        rating: reviewDraft.rating || null,
+        review: reviewDraft.text
+      });
+      setCurrentTask((task) => (task ? { ...task, rating: saved.rating, review: saved.review || '' } : task));
+      setReviewDraft({ rating: saved.rating || 0, text: saved.review || '' });
+    } catch (err) {
+      setReviewError(err.message || 'Не удалось сохранить отзыв');
+    } finally {
+      setReviewSaving(false);
+    }
+  };
+
+  const handleClearReview = async () => {
+    if (!currentTask) return;
+    setReviewSaving(true);
+    setReviewError('');
+    try {
+      const saved = await apiService.saveReview(currentTask.id, { rating: null, review: '' });
+      setCurrentTask((task) => (task ? { ...task, rating: saved.rating, review: saved.review || '' } : task));
+      setReviewDraft({ rating: 0, text: '' });
+    } catch (err) {
+      setReviewError(err.message || 'Не удалось убрать отзыв');
+    } finally {
+      setReviewSaving(false);
+    }
+  };
 
   const handleStartAnalysis = async () => {
     if (!formData.url || !formData.branch || !formData.cveId || !formData.packageName) return;
@@ -716,6 +844,78 @@ export default function ApplicabilityAnalysis() {
   };
 
   const activeModule = currentTask?.modules?.[selectedModuleIndex];
+
+  if (isReviewsView) {
+    const totalPages = Math.ceil(reviewTotal / itemsPerPage) || 1;
+    return (
+      <div style={fullPageStyle}>
+        <div style={boardContainerStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1.5rem' }}>
+            <div>
+              <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>Отзывы</h1>
+              <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>
+                Средняя оценка {formatAverage(reviewAverage)}
+                {reviewRated ? ` · ${reviewRated} со звёздами` : ''}
+              </p>
+            </div>
+            <div style={navBtnGroupStyle}>
+              <button onClick={() => window.location.href = '/analysis/list'} style={listNavBtnStyle} onMouseEnter={e => { e.currentTarget.style.backgroundColor = theme.primary; e.currentTarget.style.color = '#fff'; }} onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.color = theme.primary; }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>
+                Список анализов
+              </button>
+              <button onClick={() => window.location.href = '/analysis'} style={backBtnStyle} onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.5)'; e.currentTarget.style.borderColor = theme.primary; e.currentTarget.style.color = theme.primary; }} onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.borderColor = theme.borderDark; e.currentTarget.style.color = theme.textMuted; }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg>
+                Новый анализ
+              </button>
+            </div>
+          </div>
+
+          {reviewListError && (
+            <div style={{ ...innerCardStyle, marginBottom: '1.5rem', color: theme.error.text, backgroundColor: theme.error.bg, borderColor: theme.error.border }}>
+              {reviewListError}
+            </div>
+          )}
+
+          {reviewItems.length === 0 ? (
+            <div style={{ ...innerCardStyle, textAlign: 'center', padding: '5rem', color: theme.textMuted }}>Отзывов пока нет</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {reviewItems.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => window.location.href = `/analysis/${item.id}`}
+                    style={{ ...innerCardStyle, cursor: 'pointer', transition: 'all 0.2s' }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = theme.primary; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(203, 213, 225, 0.6)'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                      {item.rating ? <StarRow value={item.rating} size={22} /> : <span style={{ color: theme.textMuted, fontWeight: '700' }}>Без звёзд</span>}
+                      <span style={{ fontWeight: '800', color: theme.textMain }}>{item.cve_id}</span>
+                      <span style={{ color: theme.textMuted, fontSize: '0.9rem' }}>{formatDateTime(item.created_at)}</span>
+                    </div>
+                    {item.review && (
+                      <p style={{ margin: '0 0 0.85rem', color: theme.textMain, fontSize: '1.05rem', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{item.review}</p>
+                    )}
+                    <div style={{ color: theme.textMuted, fontSize: '0.95rem', wordBreak: 'break-all' }}>
+                      {item.component_url} · {item.branch} · {item.package_name}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', marginTop: '2.5rem' }}>
+                  <button disabled={reviewPage === 1} onClick={() => setReviewPage(p => p - 1)} style={{ width: '44px', height: '44px', borderRadius: '0.75rem', border: 'none', backgroundColor: 'rgba(255,255,255,0.6)', color: theme.textMuted, fontWeight: '700', cursor: reviewPage === 1 ? 'default' : 'pointer', opacity: reviewPage === 1 ? 0.5 : 1 }}>←</button>
+                  <span style={{ display: 'flex', alignItems: 'center', color: theme.textMuted, fontWeight: '600' }}>Страница {reviewPage} из {totalPages}</span>
+                  <button disabled={reviewPage === totalPages} onClick={() => setReviewPage(p => p + 1)} style={{ width: '44px', height: '44px', borderRadius: '0.75rem', border: 'none', backgroundColor: 'rgba(255,255,255,0.6)', color: theme.textMuted, fontWeight: '700', cursor: reviewPage === totalPages ? 'default' : 'pointer', opacity: reviewPage === totalPages ? 0.5 : 1 }}>→</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (isDetailView) {
     if (!currentTask) return <div style={fullPageStyle}><div style={boardContainerStyle}><div style={{ textAlign: 'center', padding: '6rem' }}><h2>Загрузка...</h2></div></div></div>;
@@ -897,6 +1097,34 @@ export default function ApplicabilityAnalysis() {
                   <b style={{ wordBreak: 'break-all', color: theme.primary }}>{currentTask.model || '—'}</b>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div style={{ ...innerCardStyle, marginBottom: '2.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: '800', color: theme.textMain }}>Оценка</h2>
+                <p style={{ margin: '0.35rem 0 0', color: theme.textMuted, fontSize: '0.95rem' }}>5 — вердикт верный, 1 — неверный. Можно ничего не ставить.</p>
+              </div>
+              <StarRow value={reviewDraft.rating} onPick={(n) => setReviewDraft({ ...reviewDraft, rating: n })} size={32} />
+            </div>
+            <textarea
+              value={reviewDraft.text}
+              onChange={(e) => setReviewDraft({ ...reviewDraft, text: e.target.value })}
+              placeholder="Почему такая оценка. Можно оставить пустым."
+              rows={4}
+              style={{ width: '100%', boxSizing: 'border-box', border: `1px solid ${theme.border}`, borderRadius: '0.75rem', padding: '0.9rem 1rem', fontSize: '1rem', fontFamily: 'inherit', color: theme.textMain, background: 'rgba(255,255,255,0.85)', resize: 'vertical' }}
+            />
+            {reviewError && <p style={{ margin: '0.75rem 0 0', color: theme.error.text, fontWeight: '600' }}>{reviewError}</p>}
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+              <button type="button" onClick={handleSaveReview} disabled={reviewSaving} style={{ ...listNavBtnStyle, backgroundColor: theme.primary, color: '#fff', borderColor: theme.primary, opacity: reviewSaving ? 0.7 : 1, cursor: reviewSaving ? 'default' : 'pointer' }}>
+                {reviewSaving ? 'Сохраняем...' : 'Сохранить'}
+              </button>
+              {(currentTask.rating || currentTask.review) && (
+                <button type="button" onClick={handleClearReview} disabled={reviewSaving} style={{ ...backBtnStyle, opacity: reviewSaving ? 0.7 : 1 }}>
+                  Убрать
+                </button>
+              )}
             </div>
           </div>
 
@@ -1172,6 +1400,7 @@ export default function ApplicabilityAnalysis() {
                           <span style={{ fontWeight: '800', fontSize: '1.2rem', color: theme.textMain }}>{task.cve_id}</span>
                           {renderStatusBadge(task.status)}
                           {renderApplicabilityBadge(task.applicability)}
+                          {task.rating ? <StarRow value={task.rating} size={18} /> : null}
                           <span style={{ fontSize: '0.9rem', color: theme.textMuted }}>{formatDateTime(task.created_at)}</span>
                         </div>
                         <div style={{ fontSize: '0.95rem', color: theme.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1238,7 +1467,15 @@ export default function ApplicabilityAnalysis() {
   return (
     <div style={fullPageStyle}>
       <div style={boardContainerStyle}>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.85rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginBottom: '0.85rem' }}>
+          <a
+            href="/analysis/reviews"
+            style={quietLinkStyle}
+            onMouseEnter={e => paintQuietLink(e.currentTarget, true)}
+            onMouseLeave={e => paintQuietLink(e.currentTarget, false)}
+          >
+            Отзывы
+          </a>
           <SwaggerButton />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3.5rem', flexWrap: 'wrap', gap: '1.5rem' }}>

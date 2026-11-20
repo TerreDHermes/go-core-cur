@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -22,6 +24,8 @@ type Service interface {
 	Check(ctx context.Context, in task.CreateInput) (string, error)
 	List(ctx context.Context, f tasksvc.ListFilter) ([]task.Task, int, error)
 	Get(ctx context.Context, id string) (task.Task, error)
+	SetReview(ctx context.Context, id string, rating *int, text string) error
+	Reviews(ctx context.Context, limit, offset int) (tasksvc.ReviewList, error)
 	Cancel(ctx context.Context, id string) error
 	Report(ctx context.Context, id string) (cveID, markdown string, err error)
 }
@@ -61,7 +65,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
 	mux.HandleFunc("GET /api/v1/analysis/go-version", h.goVersionHandler)
 	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
+	mux.HandleFunc("GET /api/v1/analysis/reviews", h.reviews)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
+	mux.HandleFunc("POST /api/v1/analysis/{id}/review", h.setReview)
 	mux.HandleFunc("POST /api/v1/analysis/{id}/cancel", h.cancel)
 	mux.HandleFunc("GET /api/v1/analysis/{id}/report", h.report)
 	mountDocs(mux)
@@ -193,6 +199,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:     t.CreatedAt,
 			DurationMS:    t.DurationMS(time.Now()),
 			Applicability: t.PublicApplicability(),
+			Rating:        t.Rating,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -212,6 +219,7 @@ type taskSummary struct {
 	CreatedAt     string  `json:"created_at"`
 	DurationMS    *int64  `json:"duration_ms"`
 	Applicability *string `json:"applicability"`
+	Rating        *int    `json:"rating"`
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +271,108 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		CloneMS:       t.CloneMS,
 		GoModCount:    t.GoModCount,
 		StopStage:     t.StopStage,
+		Rating:        t.Rating,
+		Review:        t.Review,
 	})
+}
+
+func (h *Handler) setReview(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Rating json.RawMessage `json:"rating"`
+		Review string          `json:"review"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	rating, err := parseRating(body.Rating)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	id := r.PathValue("id")
+	if err := h.svc.SetReview(r.Context(), id, rating, body.Review); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":     id,
+		"rating": rating,
+		"review": strings.TrimSpace(body.Review),
+	})
+}
+
+func parseRating(raw json.RawMessage) (*int, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var n int
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&n); err != nil {
+		return nil, fmt.Errorf("%w: rating must be from 1 to 5", task.ErrInvalidInput)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("%w: rating must be from 1 to 5", task.ErrInvalidInput)
+	}
+	return &n, nil
+}
+
+func (h *Handler) reviews(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := 10
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "limit must be an integer")
+			return
+		}
+		limit = n
+	}
+	offset := 0
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "offset must be an integer")
+			return
+		}
+		offset = n
+	}
+	page, err := h.svc.Reviews(r.Context(), limit, offset)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	items := make([]reviewItem, 0, len(page.Items))
+	for _, t := range page.Items {
+		items = append(items, reviewItem{
+			ID:           t.ID,
+			Rating:       t.Rating,
+			Review:       t.Review,
+			CVEID:        t.CVEID,
+			ComponentURL: t.ComponentURL,
+			Branch:       t.Branch,
+			PackageName:  t.PackageName,
+			CreatedAt:    t.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":   items,
+		"total":   page.Total,
+		"rated":   page.Rated,
+		"average": page.Average,
+	})
+}
+
+type reviewItem struct {
+	ID           string `json:"id"`
+	Rating       *int   `json:"rating"`
+	Review       string `json:"review"`
+	CVEID        string `json:"cve_id"`
+	ComponentURL string `json:"component_url"`
+	Branch       string `json:"branch"`
+	PackageName  string `json:"package_name"`
+	CreatedAt    string `json:"created_at"`
 }
 
 func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +409,8 @@ type taskResponse struct {
 	CloneMS       *int64           `json:"clone_ms"`
 	GoModCount    *int             `json:"go_mod_count"`
 	StopStage     string           `json:"stop_stage"`
+	Rating        *int             `json:"rating"`
+	Review        string           `json:"review"`
 }
 
 type moduleResponse struct {

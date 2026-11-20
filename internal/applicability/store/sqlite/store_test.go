@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -296,6 +297,81 @@ func TestListSearchFilters(t *testing.T) {
 	}
 	if got := ids(task.ListQuery{Status: task.StatusFailed}); len(got) != 1 || got[0] != "other" {
 		t.Fatalf("failed %v", got)
+	}
+}
+
+func TestReviewRoundTrip(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	for _, item := range []task.Task{
+		{ID: "scored", Status: task.StatusPending, ComponentURL: "https://github.com/grpc/grpc-go.git", Branch: "main", CVEID: "CVE-1", PackageName: "root", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "note", Status: task.StatusPending, ComponentURL: "https://github.com/other/repo.git", Branch: "dev", CVEID: "CVE-2", PackageName: "pkg", CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z"},
+		{ID: "plain", Status: task.StatusPending, ComponentURL: "https://github.com/plain/repo.git", Branch: "main", CVEID: "CVE-3", PackageName: "std", CreatedAt: "2026-01-03T00:00:00Z", UpdatedAt: "2026-01-03T00:00:00Z"},
+	} {
+		if err := st.Create(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	four := 4
+	one := 1
+	if err := st.SetReview(ctx, "scored", &four, "вердикт верный", "2026-01-04T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetReview(ctx, "note", nil, "  без звёзд  ", "2026-01-05T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, "scored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Rating == nil || *got.Rating != 4 || got.Review != "вердикт верный" || got.UpdatedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("%+v", got)
+	}
+	rows, err := st.ListReviews(ctx, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ID != "note" || rows[1].ID != "scored" {
+		t.Fatalf("%+v", rows)
+	}
+	if rows[0].Rating != nil || rows[0].Review != "без звёзд" {
+		t.Fatalf("note %+v", rows[0])
+	}
+	total, rated, sum, err := st.ReviewStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || rated != 1 || sum != 4 {
+		t.Fatalf("total %d rated %d sum %d", total, rated, sum)
+	}
+	listed, err := st.List(ctx, task.ListQuery{}, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scored task.Task
+	for _, item := range listed {
+		if item.ID == "scored" {
+			scored = item
+		}
+	}
+	if scored.Rating == nil || *scored.Rating != 4 {
+		t.Fatalf("list rating %+v", scored)
+	}
+	if err := st.SetReview(ctx, "scored", &one, "", "2026-01-06T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetReview(ctx, "note", nil, " ", "2026-01-06T00:00:01Z"); err != nil {
+		t.Fatal(err)
+	}
+	total, rated, sum, err = st.ReviewStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || rated != 1 || sum != 1 {
+		t.Fatalf("after clear total %d rated %d sum %d", total, rated, sum)
+	}
+	if err := st.SetReview(ctx, "missing", &four, "", "2026-01-07T00:00:00Z"); !errors.Is(err, task.ErrNotFound) {
+		t.Fatal(err)
 	}
 }
 

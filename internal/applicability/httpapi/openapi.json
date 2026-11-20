@@ -348,6 +348,128 @@
         }
       }
     },
+    "/api/v1/analysis/reviews": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "listReviews",
+        "summary": "Отзывы",
+        "description": "Анализы, у которых есть оценка или текст. `total` — сколько таких записей. `rated` — сколько из них со звёздами. `average` — средняя оценка только по звёздам, `null` если звёзд нет. Текст без звёзд в среднее не входит. Страница не учитывает `limit` и `offset` для среднего.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "default": 10 }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Страница отзывов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items", "total", "rated", "average"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["id", "cve_id", "component_url", "branch", "package_name", "created_at", "review"],
+                        "properties": {
+                          "id": { "type": "string" },
+                          "rating": { "type": "integer", "nullable": true },
+                          "review": { "type": "string" },
+                          "cve_id": { "type": "string" },
+                          "component_url": { "type": "string" },
+                          "branch": { "type": "string" },
+                          "package_name": { "type": "string" },
+                          "created_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    },
+                    "total": { "type": "integer" },
+                    "rated": { "type": "integer" },
+                    "average": { "type": "number", "nullable": true }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Неверные limit или offset",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    },
+    "/api/v1/analysis/{id}/review": {
+      "post": {
+        "tags": ["analysis"],
+        "operationId": "setAnalysisReview",
+        "summary": "Поставить оценку и отзыв",
+        "description": "Одна оценка на этот запуск. `rating` от 1 до 5 или `null`, чтобы убрать звёзды. `review` — текст, пустая строка убирает его. Оба пустые снимают анализ со страницы отзывов. Повторная отправка заменяет предыдущую оценку.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rating": { "type": "integer", "nullable": true, "minimum": 1, "maximum": 5 },
+                  "review": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Сохранённая оценка",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["id", "review"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "rating": { "type": "integer", "nullable": true },
+                    "review": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Оценка вне 1..5 или слишком длинный текст",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Задачи с таким id нет",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "task not found" }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/Internal" }
+        }
+      }
+    },
     "/api/v1/analysis/{id}": {
       "get": {
         "tags": ["analysis"],
@@ -604,7 +726,14 @@
             "nullable": true,
             "description": "Сколько миллисекунд шёл сам анализ, без ожидания в очереди. null, пока задача в очереди. Для задачи в работе — текущее время минус старт."
           },
-          "applicability": { "$ref": "#/components/schemas/Applicability" }
+          "applicability": { "$ref": "#/components/schemas/Applicability" },
+          "rating": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Оценка этого запуска от 1 до 5. null, если звёзды не ставили. 5 — вердикт верный, 1 — неверный."
+          }
         }
       },
       "AnalysisTask": {
@@ -636,6 +765,10 @@
               "stop_stage": {
                 "type": "string",
                 "description": "На каком этапе анализ остановился и сколько go.mod к этому моменту было найдено. Пусто, если анализ дошёл до конца или ещё не дошёл до сканирования."
+              },
+              "review": {
+                "type": "string",
+                "description": "Текст отзыва к этому запуску. Пустая строка, если заметки нет. Повторный анализ начинается без оценки и без текста."
               },
               "clone_ms": {
                 "type": "integer",

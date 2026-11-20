@@ -57,6 +57,12 @@ func (f fakeSvc) Report(context.Context, string) (string, string, error) {
 func (f fakeSvc) Cancel(context.Context, string) error {
 	return nil
 }
+func (f fakeSvc) SetReview(context.Context, string, *int, string) error {
+	return nil
+}
+func (f fakeSvc) Reviews(context.Context, int, int) (tasksvc.ReviewList, error) {
+	return tasksvc.ReviewList{}, nil
+}
 
 func TestCancelRoute(t *testing.T) {
 	h := NewHandler(fakeSvc{created: "abc"}, nil)
@@ -310,6 +316,33 @@ func (openErrSvc) Open(context.Context, task.CreateInput) (string, error) {
 }
 func (openErrSvc) Check(context.Context, task.CreateInput) (string, error) {
 	return "", task.ErrInvalidInput
+}
+
+func TestReviewRoute(t *testing.T) {
+	h := NewHandler(fakeSvc{}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/analysis/abc/review", strings.NewReader(`{"rating":4,"review":"верно"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rating":4`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/analysis/abc/review", strings.NewReader(`{"rating":4.5,"review":""}`))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/reviews", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"average":null`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestCheckReturnsResult(t *testing.T) {

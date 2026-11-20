@@ -58,6 +58,9 @@ func ensureColumns(db *sql.DB) error {
 		`ALTER TABLE analysis_tasks ADD COLUMN clone_ms INTEGER`,
 		`ALTER TABLE analysis_tasks ADD COLUMN go_mod_count INTEGER`,
 		`ALTER TABLE analysis_tasks ADD COLUMN stop_stage TEXT`,
+		`ALTER TABLE analysis_tasks ADD COLUMN rating INTEGER`,
+		`ALTER TABLE analysis_tasks ADD COLUMN review TEXT`,
+		`ALTER TABLE analysis_tasks ADD COLUMN reviewed_at TEXT`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDupColumn(err) {
 			return fmt.Errorf("migrate: %w", err)
@@ -299,7 +302,8 @@ func (s *Store) Get(ctx context.Context, id string) (task.Task, error) {
 		       COALESCE(error_msg, ''), created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
 		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms,
-		       go_mod_count, COALESCE(stop_stage, '')
+		       go_mod_count, COALESCE(stop_stage, ''),
+		       rating, COALESCE(review, '')
 		FROM analysis_tasks WHERE id = ?`, id)
 	t, err := scanTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -338,7 +342,8 @@ func (s *Store) List(ctx context.Context, query task.ListQuery, limit, offset in
 		       '', created_at, updated_at, COALESCE(started_at, ''),
 		       COALESCE(applicability, ''), COALESCE(model, ''),
 		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms,
-		       go_mod_count, COALESCE(stop_stage, '')
+		       go_mod_count, COALESCE(stop_stage, ''),
+		       rating, COALESCE(review, '')
 		FROM analysis_tasks` + where + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
@@ -409,6 +414,76 @@ func listWhere(q task.ListQuery) (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
+// SetReview stores one score and one note on this run.
+// A nil rating and an empty note clear both, and the analysis leaves the review list.
+// updated_at stays put so the analysis duration does not change.
+func (s *Store) SetReview(ctx context.Context, id string, rating *int, text, reviewedAt string) error {
+	var ratingVal any
+	var textVal any
+	var at any
+	if rating != nil {
+		ratingVal = *rating
+	}
+	text = strings.TrimSpace(text)
+	if rating != nil || text != "" {
+		if text != "" {
+			textVal = text
+		}
+		at = reviewedAt
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE analysis_tasks
+		SET rating = ?, review = ?, reviewed_at = ?
+		WHERE id = ?`, ratingVal, textVal, at, id)
+	if err != nil {
+		return fmt.Errorf("set review: %w", err)
+	}
+	return rowsOne(res, "review")
+}
+
+func (s *Store) ListReviews(ctx context.Context, limit, offset int) ([]task.Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, status, component_url, branch, cve_id, package_name,
+		       '', created_at, updated_at, COALESCE(started_at, ''),
+		       COALESCE(applicability, ''), COALESCE(model, ''),
+		       COALESCE(ai_calls, 0), ai_min_ms, ai_max_ms, clone_ms,
+		       go_mod_count, COALESCE(stop_stage, ''),
+		       rating, COALESCE(review, '')
+		FROM analysis_tasks
+		WHERE rating IS NOT NULL OR trim(COALESCE(review, '')) != ''
+		ORDER BY COALESCE(reviewed_at, created_at) DESC
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list reviews: %w", err)
+	}
+	defer rows.Close()
+	var out []task.Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	if out == nil {
+		out = []task.Task{}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ReviewStats(ctx context.Context) (total, rated, sum int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN rating IS NOT NULL OR trim(COALESCE(review, '')) != '' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN rating IS NOT NULL THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(rating), 0)
+		FROM analysis_tasks`).Scan(&total, &rated, &sum)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("review stats: %w", err)
+	}
+	return total, rated, sum, nil
+}
+
 func (s *Store) ListPendingIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id FROM analysis_tasks
@@ -437,12 +512,13 @@ func scanTask(row scanner) (task.Task, error) {
 	var t task.Task
 	var status string
 	var calls int
-	var minMS, maxMS, cloneMS, goMods sql.NullInt64
+	var minMS, maxMS, cloneMS, goMods, rating sql.NullInt64
 	err := row.Scan(
 		&t.ID, &status, &t.ComponentURL, &t.Branch, &t.CVEID, &t.PackageName,
 		&t.ErrorMsg, &t.CreatedAt, &t.UpdatedAt, &t.StartedAt,
 		&t.Applicability, &t.Model,
 		&calls, &minMS, &maxMS, &cloneMS, &goMods, &t.StopStage,
+		&rating, &t.Review,
 	)
 	if err != nil {
 		return task.Task{}, err
@@ -464,6 +540,10 @@ func scanTask(row scanner) (task.Task, error) {
 	if goMods.Valid {
 		v := int(goMods.Int64)
 		t.GoModCount = &v
+	}
+	if rating.Valid {
+		v := int(rating.Int64)
+		t.Rating = &v
 	}
 	return t, nil
 }

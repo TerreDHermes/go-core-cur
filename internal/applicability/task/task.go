@@ -57,6 +57,10 @@ type Task struct {
 	CloneMS       *int64
 	GoModCount    *int
 	StopStage     string
+	// Rating is 1..5 when a person scored this run. Nil means no score.
+	// Review is the optional note. A new run starts with both empty.
+	Rating *int
+	Review string
 }
 
 // ModuleResult is the outcome for one go.mod that lists PackageName.

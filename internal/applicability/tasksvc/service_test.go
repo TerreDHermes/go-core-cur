@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +19,53 @@ type recordingQueue struct {
 func (q *recordingQueue) Enqueue(_ context.Context, id string) error {
 	q.ids = append(q.ids, id)
 	return nil
+}
+
+func TestSetReviewAndAverage(t *testing.T) {
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := New(st, &recordingQueue{})
+	ctx := context.Background()
+	if err := st.Create(ctx, task.Task{
+		ID: "a", Status: task.StatusCompleted, ComponentURL: "u", Branch: "b",
+		CVEID: "c", PackageName: "p", CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Create(ctx, task.Task{
+		ID: "b", Status: task.StatusCompleted, ComponentURL: "u", Branch: "b",
+		CVEID: "c2", PackageName: "p", CreatedAt: "2026-01-02T00:00:00Z", UpdatedAt: "2026-01-02T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	five := 5
+	three := 3
+	if err := svc.SetReview(ctx, "a", &five, "совпало"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetReview(ctx, "b", nil, "только текст"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SetReview(ctx, "a", &three, strings.Repeat("я", 2001)); !errors.Is(err, task.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	bad := 6
+	if err := svc.SetReview(ctx, "a", &bad, ""); !errors.Is(err, task.ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	page, err := svc.Reviews(ctx, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 || page.Rated != 1 || page.Average == nil || *page.Average != 5 {
+		t.Fatalf("%+v", page)
+	}
+	if len(page.Items) != 2 || page.Items[0].Review != "только текст" || page.Items[1].Review != "совпало" {
+		t.Fatalf("%+v", page.Items)
+	}
 }
 
 func TestListRejectsUnknownApplicability(t *testing.T) {

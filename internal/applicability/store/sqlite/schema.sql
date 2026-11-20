@@ -16,7 +16,10 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     ai_max_ms INTEGER,
     clone_ms INTEGER,
     go_mod_count INTEGER,
-    stop_stage TEXT
+    stop_stage TEXT,
+    rating INTEGER,
+    review TEXT,
+    reviewed_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_created_at

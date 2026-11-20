@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"cve-patch-viewer/internal/applicability/store"
 	"cve-patch-viewer/internal/applicability/task"
@@ -174,6 +175,63 @@ func normalizeList(f ListFilter) (task.ListQuery, error) {
 		return task.ListQuery{}, fmt.Errorf("%w: applicability", task.ErrInvalidInput)
 	}
 	return q, nil
+}
+
+const maxReviewRunes = 2000
+
+// ReviewList is one page of analyses that have a score or a note.
+// Average counts only scored analyses. A note without stars stays in Items
+// and does not move Average.
+type ReviewList struct {
+	Items   []task.Task
+	Total   int
+	Rated   int
+	Average *float64
+}
+
+// SetReview saves the score and the note for one analysis.
+// A nil rating clears the stars. An empty note clears the text.
+// Both empty removes the analysis from the review list.
+func (s *Service) SetReview(ctx context.Context, id string, rating *int, text string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("%w: id is required", task.ErrInvalidInput)
+	}
+	if rating != nil && (*rating < 1 || *rating > 5) {
+		return fmt.Errorf("%w: rating must be from 1 to 5", task.ErrInvalidInput)
+	}
+	text = strings.TrimSpace(text)
+	if utf8.RuneCountInString(text) > maxReviewRunes {
+		return fmt.Errorf("%w: review is too long", task.ErrInvalidInput)
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	return s.store.SetReview(ctx, id, rating, text, now)
+}
+
+func (s *Service) Reviews(ctx context.Context, limit, offset int) (ReviewList, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		return ReviewList{}, fmt.Errorf("%w: offset must be >= 0", task.ErrInvalidInput)
+	}
+	items, err := s.store.ListReviews(ctx, limit, offset)
+	if err != nil {
+		return ReviewList{}, err
+	}
+	total, rated, sum, err := s.store.ReviewStats(ctx)
+	if err != nil {
+		return ReviewList{}, err
+	}
+	out := ReviewList{Items: items, Total: total, Rated: rated}
+	if rated > 0 {
+		avg := float64(sum) / float64(rated)
+		out.Average = &avg
+	}
+	return out, nil
 }
 
 func (s *Service) Get(ctx context.Context, id string) (task.Task, error) {

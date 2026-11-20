@@ -21,5 +21,8 @@ type Store interface {
 	LatestID(ctx context.Context, componentURL, branch, cveID, packageName string) (string, error)
 	List(ctx context.Context, q task.ListQuery, limit, offset int) ([]task.Task, error)
 	Count(ctx context.Context, q task.ListQuery) (int, error)
+	SetReview(ctx context.Context, id string, rating *int, text, reviewedAt string) error
+	ListReviews(ctx context.Context, limit, offset int) ([]task.Task, error)
+	ReviewStats(ctx context.Context) (total, rated, sum int, err error)
 	ListPendingIDs(ctx context.Context) ([]string, error)
 }
