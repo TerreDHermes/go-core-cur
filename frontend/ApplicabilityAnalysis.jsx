@@ -99,6 +99,23 @@ const apiService = {
     if (!res.ok) throw new Error('Failed to fetch Go version');
     const data = await res.json();
     return data.version || '';
+  },
+
+  suggestProjects: async (q) => {
+    const params = new URLSearchParams({ q: q || '' });
+    const res = await fetch(`${API_BASE}/projects?${params}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.items || [];
+  },
+
+  suggestBranches: async (url, q) => {
+    if (!url) return [];
+    const params = new URLSearchParams({ component_url: url, q: q || '' });
+    const res = await fetch(`${API_BASE}/branches?${params}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.items || [];
   }
 };
 
@@ -416,6 +433,162 @@ function ModelPicker({ value, onChange }) {
           to { transform: rotate(360deg); }
         }
       `}</style>
+    </div>
+  );
+}
+
+const fieldInputStyle = {
+  border: `1px solid ${theme.border}`,
+  borderRadius: '0.75rem',
+  padding: '1.1rem 1.35rem',
+  fontSize: '1.1rem',
+  width: '100%',
+  boxSizing: 'border-box',
+  outline: 'none',
+  backgroundColor: 'rgba(255,255,255,0.8)',
+  transition: 'all 0.2s',
+  color: theme.textMain
+};
+
+function SuggestField({ label, placeholder, value, onChange, load, reloadKey, onPick, itemKey, itemText, itemHint }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [active, setActive] = useState(-1);
+  const boxRef = useRef(null);
+  const timer = useRef(null);
+  const seq = useRef(0);
+
+  const run = (text) => {
+    const id = ++seq.current;
+    Promise.resolve()
+      .then(() => load(text))
+      .then((list) => {
+        if (id !== seq.current) return;
+        setItems(Array.isArray(list) ? list : []);
+        setActive(-1);
+      })
+      .catch(() => {
+        if (id !== seq.current) return;
+        setItems([]);
+      });
+  };
+
+  const schedule = (text) => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => run(text), 250);
+  };
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    schedule(value);
+    return undefined;
+  }, [reloadKey]);
+
+  const choose = (item) => {
+    setOpen(false);
+    setItems([]);
+    onPick(item);
+  };
+
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      setOpen(false);
+      return;
+    }
+    if (!open || items.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActive((index) => (index + 1) % items.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive((index) => (index <= 0 ? items.length - 1 : index - 1));
+    } else if (event.key === 'Enter' && active >= 0) {
+      event.preventDefault();
+      choose(items[active]);
+    }
+  };
+
+  return (
+    <div ref={boxRef} style={{ marginBottom: '2rem', position: 'relative' }}>
+      <label style={{ display: 'block', fontSize: '1.05rem', fontWeight: '700', marginBottom: '0.85rem', color: theme.textMain }}>
+        {label} <span style={{ color: '#DC2626' }}>*</span>
+      </label>
+      <input
+        value={value}
+        placeholder={placeholder}
+        autoComplete="off"
+        aria-autocomplete="list"
+        aria-expanded={open && items.length > 0}
+        style={fieldInputStyle}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+          schedule(event.target.value);
+        }}
+        onFocus={(event) => {
+          setOpen(true);
+          run(value);
+          event.target.style.borderColor = theme.primary;
+          event.target.style.boxShadow = `0 0 0 4px ${theme.primaryLight}`;
+        }}
+        onBlur={(event) => {
+          event.target.style.borderColor = theme.border;
+          event.target.style.boxShadow = 'none';
+          setTimeout(() => setOpen(false), 120);
+        }}
+        onKeyDown={onKeyDown}
+      />
+      {open && items.length > 0 && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: '100%',
+            marginTop: '0.4rem',
+            background: '#fff',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '0.75rem',
+            boxShadow: '0 12px 30px rgba(30, 41, 59, 0.12)',
+            zIndex: 20,
+            maxHeight: '16rem',
+            overflowY: 'auto'
+          }}
+        >
+          {items.map((item, index) => {
+            const hint = itemHint(item);
+            const selected = index === active;
+            return (
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                key={itemKey(item)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => choose(item)}
+                onMouseEnter={() => setActive(index)}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  border: 'none',
+                  borderBottom: index === items.length - 1 ? 'none' : `1px solid ${theme.border}`,
+                  background: selected ? theme.primaryLight : '#fff',
+                  padding: '0.85rem 1.1rem',
+                  cursor: 'pointer',
+                  color: theme.textMain
+                }}
+              >
+                <span style={{ display: 'block', fontWeight: '700', fontSize: '1rem' }}>{itemText(item)}</span>
+                {hint && <span style={{ display: 'block', marginTop: '0.2rem', color: theme.textMuted, fontSize: '0.9rem' }}>{hint}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1547,12 +1720,39 @@ export default function ApplicabilityAnalysis() {
               </div>
             )}
 
-            {['url', 'branch', 'cveId', 'packageName'].map((name, i) => (
+            <SuggestField
+              label="Ссылка на компонент"
+              placeholder="https://git.slo/dapp/dapp-grafana.git"
+              value={formData.url}
+              onChange={(url) => setFormData((prev) => ({ ...prev, url }))}
+              load={(q) => apiService.suggestProjects(q)}
+              onPick={(item) => setFormData((prev) => ({
+                ...prev,
+                url: item.url,
+                branch: prev.branch || item.default_branch || ''
+              }))}
+              itemKey={(item) => item.url}
+              itemText={(item) => item.path}
+              itemHint={(item) => item.default_branch ? `ветка ${item.default_branch}` : ''}
+            />
+            <SuggestField
+              label="Имя ветки"
+              placeholder="main / release-1.31"
+              value={formData.branch}
+              onChange={(branch) => setFormData((prev) => ({ ...prev, branch }))}
+              reloadKey={formData.url}
+              load={(q) => apiService.suggestBranches(formData.url, q)}
+              onPick={(item) => setFormData((prev) => ({ ...prev, branch: item.name }))}
+              itemKey={(item) => item.name}
+              itemText={(item) => item.name}
+              itemHint={(item) => item.default ? 'по умолчанию' : ''}
+            />
+            {['cveId', 'packageName'].map((name, i) => (
               <div key={name} style={{ marginBottom: '2rem' }}>
                 <label style={{ display: 'block', fontSize: '1.05rem', fontWeight: '700', marginBottom: '0.85rem', color: theme.textMain }}>
-                  {['Ссылка на компонент', 'Имя ветки', 'CVE ID или алиас', 'Уязвимый пакет'][i]} <span style={{ color: '#DC2626' }}>*</span>
+                  {['CVE ID или алиас', 'Уязвимый пакет'][i]} <span style={{ color: '#DC2626' }}>*</span>
                 </label>
-                <input name={name} style={{ border: `1px solid ${theme.border}`, borderRadius: '0.75rem', padding: '1.1rem 1.35rem', fontSize: '1.1rem', width: '100%', boxSizing: 'border-box', outline: 'none', backgroundColor: 'rgba(255,255,255,0.8)', transition: 'all 0.2s', color: theme.textMain }} placeholder={['https://gitlab.com/org/project.git', 'main / release-1.31', 'CVE-2025-22869', 'golang.org/x/crypto/ssh'][i]} value={formData[name]} onChange={e => setFormData({ ...formData, [name]: e.target.value })} onFocus={e => { e.target.style.borderColor = theme.primary; e.target.style.boxShadow = `0 0 0 4px ${theme.primaryLight}`; }} onBlur={e => { e.target.style.borderColor = theme.border; e.target.style.boxShadow = 'none'; }} />
+                <input name={name} style={fieldInputStyle} placeholder={['CVE-2025-22869', 'golang.org/x/crypto/ssh'][i]} value={formData[name]} onChange={e => setFormData({ ...formData, [name]: e.target.value })} onFocus={e => { e.target.style.borderColor = theme.primary; e.target.style.boxShadow = `0 0 0 4px ${theme.primaryLight}`; }} onBlur={e => { e.target.style.borderColor = theme.border; e.target.style.boxShadow = 'none'; }} />
               </div>
             ))}
             {typeof currentGo === 'string' && (

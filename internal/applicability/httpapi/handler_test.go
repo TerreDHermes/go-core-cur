@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"cve-patch-viewer/internal/applicability/gitrepo"
 	"cve-patch-viewer/internal/applicability/task"
 	"cve-patch-viewer/internal/applicability/tasksvc"
 )
@@ -364,6 +365,51 @@ func TestCheckReturnsResult(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+type fakeSuggest struct{}
+
+func (fakeSuggest) Projects(context.Context, string) ([]gitrepo.ProjectSuggestion, error) {
+	return []gitrepo.ProjectSuggestion{{
+		Path: "dapp/dapp-grafana", URL: "https://git.slo/dapp/dapp-grafana.git", DefaultBranch: "main",
+	}}, nil
+}
+
+func (fakeSuggest) Branches(context.Context, string, string) ([]gitrepo.BranchSuggestion, error) {
+	return []gitrepo.BranchSuggestion{{Name: "main", Default: true}}, nil
+}
+
+func TestSuggestionsStayEmptyWithoutACatalog(t *testing.T) {
+	h := NewHandler(fakeSvc{}, nil)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	for _, path := range []string{"/api/v1/analysis/projects?q=graf", "/api/v1/analysis/branches?component_url=https://git.slo/dapp/dapp-grafana.git&q=rel"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"items":[]}` {
+			t.Fatalf("%s %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestSuggestionsReturnTheCatalog(t *testing.T) {
+	h := NewHandler(fakeSvc{}, nil)
+	h.UseSuggestions(fakeSuggest{})
+	mux := http.NewServeMux()
+	h.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/projects?q=graf", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "dapp-grafana.git") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/analysis/branches?component_url=https://git.slo/dapp/dapp-grafana.git", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"main"`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }

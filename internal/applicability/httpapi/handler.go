@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"cve-patch-viewer/internal/applicability/gitrepo"
 	"cve-patch-viewer/internal/applicability/scan"
 	"cve-patch-viewer/internal/applicability/task"
 	"cve-patch-viewer/internal/applicability/tasksvc"
@@ -30,11 +31,19 @@ type Service interface {
 	Report(ctx context.Context, id string) (cveID, markdown string, err error)
 }
 
+// Suggestions lists repositories and branches for the analysis form.
+// A failure or an empty result leaves the typed value as it is.
+type Suggestions interface {
+	Projects(ctx context.Context, query string) ([]gitrepo.ProjectSuggestion, error)
+	Branches(ctx context.Context, componentURL, query string) ([]gitrepo.BranchSuggestion, error)
+}
+
 type Handler struct {
 	svc          Service
 	log          *slog.Logger
 	defaultModel string
 	listModels   func(context.Context) ([]string, error)
+	suggestions  Suggestions
 	webBase      string
 }
 
@@ -46,6 +55,12 @@ func (h *Handler) UseModels(defaultModel string, list func(context.Context) ([]s
 
 // UseWebBase is the public origin of the analysis page, without a trailing slash.
 // An empty base redirects to /analysis/{id} on the host that received the request.
+// UseSuggestions fills the project and branch fields from a GitLab group.
+// A nil source makes those routes answer with an empty list.
+func (h *Handler) UseSuggestions(s Suggestions) {
+	h.suggestions = s
+}
+
 func (h *Handler) UseWebBase(base string) {
 	h.webBase = strings.TrimRight(strings.TrimSpace(base), "/")
 }
@@ -65,6 +80,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis/default-model", h.defaultModelHandler)
 	mux.HandleFunc("GET /api/v1/analysis/go-version", h.goVersionHandler)
 	mux.HandleFunc("GET /api/v1/analysis/models", h.modelsHandler)
+	mux.HandleFunc("GET /api/v1/analysis/projects", h.projectSuggestions)
+	mux.HandleFunc("GET /api/v1/analysis/branches", h.branchSuggestions)
 	mux.HandleFunc("GET /api/v1/analysis/reviews", h.reviews)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
 	mux.HandleFunc("POST /api/v1/analysis/{id}/review", h.setReview)
@@ -429,6 +446,42 @@ func (h *Handler) goVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) defaultModelHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"model": h.defaultModel})
+}
+
+func (h *Handler) projectSuggestions(w http.ResponseWriter, r *http.Request) {
+	items := []gitrepo.ProjectSuggestion{}
+	if h.suggestions != nil {
+		got, err := h.suggestions.Projects(r.Context(), clipQuery(r.URL.Query().Get("q")))
+		if err != nil {
+			h.log.Warn("project suggestions", "err", err)
+		} else if got != nil {
+			items = got
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) branchSuggestions(w http.ResponseWriter, r *http.Request) {
+	items := []gitrepo.BranchSuggestion{}
+	if h.suggestions != nil {
+		q := r.URL.Query()
+		got, err := h.suggestions.Branches(r.Context(), strings.TrimSpace(q.Get("component_url")), clipQuery(q.Get("q")))
+		if err != nil {
+			h.log.Warn("branch suggestions", "err", err)
+		} else if got != nil {
+			items = got
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func clipQuery(q string) string {
+	q = strings.TrimSpace(q)
+	runes := []rune(q)
+	if len(runes) > 300 {
+		return string(runes[:300])
+	}
+	return q
 }
 
 func (h *Handler) modelsHandler(w http.ResponseWriter, r *http.Request) {

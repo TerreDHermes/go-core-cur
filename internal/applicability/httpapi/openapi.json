@@ -94,6 +94,97 @@
         }
       }
     },
+    "/api/v1/analysis/projects": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "suggestProjects",
+        "summary": "Подсказки проектов",
+        "description": "Проекты группы из `GIT_SUGGEST_ROOT` (по умолчанию `https://git.slo/dapp`), включая вложенные группы. Токен — тот же `GIT_TOKEN`, наружу он не отдаётся.\n\n`q` — кусок имени, пути или адреса. Пустой запрос возвращает первые 20 проектов по пути. Чужой хост даёт пустой список. Нет токена, группа не задана или GitLab не ответил — тоже пустой список, ввод вручную от этого не зависит.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "example": "grafana" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "До 20 проектов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["path", "url"],
+                        "properties": {
+                          "path": { "type": "string", "example": "dapp/dapp-grafana" },
+                          "url": { "type": "string", "example": "https://git.slo/dapp/dapp-grafana.git" },
+                          "default_branch": { "type": "string", "example": "main" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analysis/branches": {
+      "get": {
+        "tags": ["analysis"],
+        "operationId": "suggestBranches",
+        "summary": "Подсказки веток",
+        "description": "Ветки проекта из той же группы. `component_url` — адрес, который уже лежит в поле. Адрес вне группы даёт пустой список.\n\n`q` ищется внутри имени ветки. Ветка по умолчанию стоит первой, когда она подходит под запрос или запрос пустой. Ответ не длиннее 20 веток.",
+        "parameters": [
+          {
+            "name": "component_url",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "example": "https://git.slo/dapp/dapp-grafana.git" }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "example": "release" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "До 20 веток",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["items"],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["name", "default"],
+                        "properties": {
+                          "name": { "type": "string", "example": "release/k8sc-6.0.0" },
+                          "default": { "type": "boolean", "example": false }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analysis/open": {
       "get": {
         "tags": ["analysis"],

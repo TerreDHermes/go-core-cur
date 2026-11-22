@@ -9,32 +9,34 @@ import (
 )
 
 type Config struct {
-	HTTPAddr     string
-	SQLitePath   string
-	WorkerCount  int
-	GitTimeout   time.Duration
-	QueueSize    int
-	GitToken     string
-	CVEPatchBase string
-	AIBaseURL    string
-	AIToken      string
-	AIModel      string
-	WebBaseURL   string
+	HTTPAddr       string
+	SQLitePath     string
+	WorkerCount    int
+	GitTimeout     time.Duration
+	QueueSize      int
+	GitToken       string
+	GitSuggestRoot string
+	CVEPatchBase   string
+	AIBaseURL      string
+	AIToken        string
+	AIModel        string
+	WebBaseURL     string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:     env("HTTP_ADDR", ":8741"),
-		SQLitePath:   env("SQLITE_PATH", "data/analysis.db"),
-		WorkerCount:  2,
-		GitTimeout:   2 * time.Minute,
-		QueueSize:    128,
-		GitToken:     os.Getenv("GIT_TOKEN"),
-		CVEPatchBase: env("CVE_PATCH_BASE", "http://d49.dev.k8s:8080"),
-		AIBaseURL:    os.Getenv("AI_BASE_URL"),
-		AIToken:      os.Getenv("AI_TOKEN"),
-		AIModel:      os.Getenv("AI_MODEL"),
-		WebBaseURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("WEB_BASE_URL")), "/"),
+		HTTPAddr:       env("HTTP_ADDR", ":8741"),
+		SQLitePath:     env("SQLITE_PATH", "data/analysis.db"),
+		WorkerCount:    2,
+		GitTimeout:     2 * time.Minute,
+		QueueSize:      128,
+		GitToken:       os.Getenv("GIT_TOKEN"),
+		GitSuggestRoot: gitSuggestRoot(),
+		CVEPatchBase:   env("CVE_PATCH_BASE", "http://d49.dev.k8s:8080"),
+		AIBaseURL:      os.Getenv("AI_BASE_URL"),
+		AIToken:        os.Getenv("AI_TOKEN"),
+		AIModel:        os.Getenv("AI_MODEL"),
+		WebBaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("WEB_BASE_URL")), "/"),
 	}
 
 	if v := os.Getenv("WORKER_COUNT"); v != "" {
@@ -57,6 +59,16 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("HTTP_ADDR and SQLITE_PATH must be set")
 	}
 	return cfg, nil
+}
+
+// gitSuggestRoot is the GitLab group whose projects fill the analysis form.
+// Unset means https://git.slo/dapp. An explicit empty value turns suggestions off.
+func gitSuggestRoot() string {
+	v, ok := os.LookupEnv("GIT_SUGGEST_ROOT")
+	if !ok {
+		return "https://git.slo/dapp"
+	}
+	return strings.TrimRight(strings.TrimSpace(v), "/")
 }
 
 func env(key, fallback string) string {
