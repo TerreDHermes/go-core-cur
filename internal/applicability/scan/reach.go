@@ -33,6 +33,13 @@ func analyzeReach(ctx context.Context, repoPath string, files []task.PatchFile, 
 			if len(fns) >= maxReachFuncs {
 				break
 			}
+			// A function the patch deletes is not in this tree. Asking deadcode
+			// about it reports the symbol as live, because it is absent from
+			// the unreachable list. Only declarations that are still in the file
+			// say whether the remaining code is reachable.
+			if functionText(repoPath, match.Path, fn) == "" {
+				continue
+			}
 			fns = append(fns, reachItem(repoPath, match.Path, fn, stdlib, run.Goroot))
 		}
 	}

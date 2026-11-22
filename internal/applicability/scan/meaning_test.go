@@ -336,7 +336,7 @@ func TestMeaningCountsAPartialAttempt(t *testing.T) {
 
 func TestMeaningSkipsWhenThreeFilesMatchNothing(t *testing.T) {
 	root := t.TempDir()
-	files, matches := blankFiles(t, root, 3)
+	files, matches := heavyBlankFiles(t, root, 3)
 	partial := halfMatchedFile(t, root)
 	files = append(files, partial.file)
 	matches = append(matches, partial.match)
@@ -389,6 +389,102 @@ func TestMeaningStillAsksWhenOnlyTwoFilesMatchNothing(t *testing.T) {
 	}
 }
 
+func TestMeaningAsksSingleMissFilesUntilFour(t *testing.T) {
+	root := t.TempDir()
+	files, matches := blankFiles(t, root, 4)
+	ai := &meaningAI{reply: func(prompt string) (string, error) {
+		if !strings.Contains(prompt, "несущественно") {
+			t.Fatal(prompt)
+		}
+		return "нет", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	noteAppliedPatchReviewed(context.Background(), ai, root, files, &report)
+	if len(ai.prompts) != 4 {
+		t.Fatal(len(ai.prompts), report.PatchCheck.Detail)
+	}
+	if strings.Contains(report.PatchCheck.Detail, "больше четырёх") {
+		t.Fatal(report.PatchCheck.Detail)
+	}
+}
+
+func TestMeaningLeavesFiveSingleMissFilesToTheLineCheck(t *testing.T) {
+	root := t.TempDir()
+	files, matches := blankFiles(t, root, 5)
+	partial := halfMatchedFile(t, root)
+	files = append(files, partial.file)
+	matches = append(matches, partial.match)
+	ai := &meaningAI{reply: func(string) (string, error) {
+		return "нет", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	noteAppliedPatchReviewed(context.Background(), ai, root, files, &report)
+	if len(ai.prompts) != 1 {
+		t.Fatal(len(ai.prompts), report.PatchCheck.Detail)
+	}
+	if !strings.Contains(report.PatchCheck.Detail, "больше четырёх") {
+		t.Fatal(report.PatchCheck.Detail)
+	}
+	if strings.Contains(report.PatchCheck.Detail, "не запускалась") {
+		t.Fatal(report.PatchCheck.Detail)
+	}
+}
+
+func TestMeaningAcceptsAnInsubstantialEdit(t *testing.T) {
+	root := t.TempDir()
+	rel := "chart/values.yaml"
+	mustWrite(t, filepath.Join(root, rel), "updated: \"2020-01-01T00:00:00Z\"\nlimit: 10\n")
+	file := task.PatchFile{Filename: rel, Patch: "" +
+		"@@ values\n" +
+		"-updated: \"2020-01-01T00:00:00Z\"\n" +
+		"+updated: \"2024-01-02T00:00:00Z\"\n" +
+		" limit: 10\n"}
+	matches := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	if status, line := assessPatchFile(root, file, matches); status != "partial" || !strings.Contains(line, "0 из 1") {
+		t.Fatal(status, line)
+	}
+	ai := &meaningAI{reply: func(string) (string, error) {
+		return "несущественно | updated: \"2024-01-02T00:00:00Z\"", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	note := noteAppliedPatchReviewed(context.Background(), ai, root, []task.PatchFile{file}, &report)
+	if note == "" || report.PatchApplied == nil || !report.PatchApplied.Applied {
+		t.Fatal(note, report.PatchCheck)
+	}
+	if report.PatchCheck.Outcome != task.PatchCheckFull {
+		t.Fatal(report.PatchCheck.Outcome, report.PatchCheck.Files)
+	}
+	if !strings.Contains(strings.Join(report.PatchCheck.Files, "\n"), "несущественными") {
+		t.Fatal(report.PatchCheck.Files)
+	}
+}
+
+func TestMeaningRejectsInsubstantialQuoteThatIsNotInTheDiff(t *testing.T) {
+	root := t.TempDir()
+	rel := "chart/values.yaml"
+	mustWrite(t, filepath.Join(root, rel), "limit: 10\n")
+	file := task.PatchFile{Filename: rel, Patch: "" +
+		"@@ values\n" +
+		"-limit: 10\n" +
+		"+limit: 1\n"}
+	matches := []task.PatchFileMatch{{Filename: rel, Found: true, Path: "./" + rel}}
+	ai := &meaningAI{reply: func(string) (string, error) {
+		return "несущественно | updated: \"2024-01-02T00:00:00Z\"", nil
+	}}
+	yes := true
+	report := task.Report{PatchFiles: matches, Reach: &task.ReachReport{Reachable: &yes}}
+	noteAppliedPatchReviewed(context.Background(), ai, root, []task.PatchFile{file}, &report)
+	if report.PatchCheck.Outcome == task.PatchCheckFull {
+		t.Fatal(report.PatchCheck.Files)
+	}
+	if !strings.Contains(strings.Join(report.PatchCheck.Files, "\n"), "не увидела попытку") {
+		t.Fatal(report.PatchCheck.Files)
+	}
+}
+
 func blankFiles(t *testing.T, root string, n int) ([]task.PatchFile, []task.PatchFileMatch) {
 	t.Helper()
 	var files []task.PatchFile
@@ -424,6 +520,23 @@ func halfMatchedFile(t *testing.T, root string) struct {
 		file  task.PatchFile
 		match task.PatchFileMatch
 	}{file: file, match: task.PatchFileMatch{Filename: name, Found: true, Path: "./" + name}}
+}
+
+func heavyBlankFiles(t *testing.T, root string, n int) ([]task.PatchFile, []task.PatchFileMatch) {
+	t.Helper()
+	var files []task.PatchFile
+	var matches []task.PatchFileMatch
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("pkg/heavy%d.go", i)
+		mustWrite(t, filepath.Join(root, name), "package p\n\nfunc Foo() {\n\tstay()\n}\n\nfunc Bar() {\n\tstay()\n}\n")
+		files = append(files, task.PatchFile{Filename: name, Patch: fmt.Sprintf(""+
+			"@@ func Foo\n"+
+			"+onlyFoo%d()\n"+
+			"@@ func Bar\n"+
+			"+onlyBar%d()\n", i, i)})
+		matches = append(matches, task.PatchFileMatch{Filename: name, Found: true, Path: "./" + name})
+	}
+	return files, matches
 }
 
 func driftedHunk(name, added string) task.PatchFile {

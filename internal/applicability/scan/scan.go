@@ -44,7 +44,11 @@ type Explainer interface {
 // A reachable patch is not applicable only when every hunk is already present.
 // A file the line check left short is shown to the model once, without the match count.
 // A yes counts only when the quoted line is in that slice and carries the added tokens.
-// Three or more files with no matched fragment skip that call.
+// A remaining edit that does not carry the fix counts when the model quotes that edit.
+// Three or more files that missed every fragment of two or more skip that call.
+// A file with one missed fragment does not count toward those three. Up to four
+// such files are still asked. A function the patch deletes and the file no longer
+// has is not sent to deadcode.
 // The deterministic text stays in Report.PreVerdict. Explain replaces Verdict and fills Narrative.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
 	note(ctx, "чтение заметок")

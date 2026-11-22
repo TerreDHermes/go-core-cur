@@ -15,54 +15,85 @@ import (
 // does not count, and the line check stays.
 const meaningExcerptLines = 800
 
-// meaningBlankFiles is how many code files with zero matched fragments
-// turn the model off for the whole patch. A file that matched some fragments
-// does not count, and neither does a file the line check did not score.
-const meaningBlankFiles = 3
+// meaningHeavyBlankFiles is how many code files with two or more fragments
+// and zero matches turn the model off for the whole patch. A file that
+// matched some fragments does not count, and neither does a file the line
+// check did not score. A file with a single missed fragment is a lighter
+// miss: up to meaningSingleMissFiles of those are still asked, and they
+// do not count toward the heavy limit.
+const meaningHeavyBlankFiles = 3
+const meaningSingleMissFiles = 4
 
-var meaningLineRE = regexp.MustCompile(`(?i)^(?:\d+\s*[:.)]\s*)?(да|нет)(?:\s*(?:\||—|–|-)\s*(.*))?$`)
+var meaningLineRE = regexp.MustCompile(`(?i)^(?:\d+\s*[:.)]\s*)?(да|нет|несущественно)(?:\s*(?:\||—|–|-)\s*(.*))?$`)
 
 type meaningAnswer struct {
-	yes   bool
-	quote string
+	yes     bool
+	trivial bool
+	quote   string
 }
 
 // refinePatchCheck asks the model about each code file the line check left
 // short of a full match. One request asks whether this file shows an attempt
 // to land the patch. A yes that quotes a line from the excerpt counts the
-// whole file, even when some fragments are missing. Files that already match,
-// and hunks that only edit a missing function, are not sent. Three or more
-// files with no matched fragment skip the model for every file. One or two
-// such files are still asked.
+// whole file, even when some fragments are missing. A file whose only
+// remaining edits do not carry the fix can be counted too, when the model
+// points at that edit. Files that already match, and hunks that only edit a
+// missing function, are not sent. Three or more files that missed every
+// fragment of two or more skip the model for every file. A file with one
+// missed fragment does not count toward those three. Up to four such files
+// are still asked. More than four are left to the line check, while files
+// that already matched something are still asked.
 func refinePatchCheck(ctx context.Context, explain Explainer, repoPath string, files []task.PatchFile, report *task.Report) *task.PatchCheck {
 	items := collectPatchItems(repoPath, files, report)
-	if blankPatchFiles(repoPath, files, report.PatchFiles) >= meaningBlankFiles {
+	heavy, single := missCounts(repoPath, files, report.PatchFiles)
+	if heavy >= meaningHeavyBlankFiles {
 		check := summarizePatchItems(items)
 		check.Detail += " Смысловая сверка не запускалась: не совпал ни один фрагмент в трёх или больше файлах."
 		return check
 	}
+	skipSingle := single > meaningSingleMissFiles
 	for i, file := range files {
 		if items[i].status != "partial" || ctx.Err() != nil {
 			continue
 		}
+		if skipSingle && singleMissFile(repoPath, file, report.PatchFiles) {
+			continue
+		}
 		items[i] = reviewPartialFile(ctx, explain, repoPath, file, report.PatchFiles)
 	}
-	return summarizePatchItems(items)
+	check := summarizePatchItems(items)
+	if skipSingle {
+		check.Detail += " Файлы, где не найден единственный фрагмент, не сверялись: таких файлов больше четырёх."
+	}
+	return check
 }
 
-// blankPatchFiles counts code files the line check scored and matched nothing in.
-func blankPatchFiles(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) int {
-	n := 0
+// missCounts splits files the line check scored and matched nothing in.
+// A single fragment is the light bucket. Two or more fragments are heavy.
+func missCounts(repoPath string, files []task.PatchFile, matches []task.PatchFileMatch) (heavy, single int) {
 	for _, file := range files {
 		if ignoredPatchName(file.Filename) {
 			continue
 		}
 		got := inspectPatchFile(repoPath, file, matches)
-		if got.counted > 0 && got.matched == 0 {
-			n++
+		if got.counted == 0 || got.matched > 0 {
+			continue
 		}
+		if got.counted == 1 {
+			single++
+			continue
+		}
+		heavy++
 	}
-	return n
+	return heavy, single
+}
+
+func singleMissFile(repoPath string, file task.PatchFile, matches []task.PatchFileMatch) bool {
+	if ignoredPatchName(file.Filename) {
+		return false
+	}
+	got := inspectPatchFile(repoPath, file, matches)
+	return got.counted == 1 && got.matched == 0
 }
 
 func reviewPartialFile(ctx context.Context, explain Explainer, repoPath string, file task.PatchFile, matches []task.PatchFileMatch) patchItem {
@@ -98,19 +129,26 @@ func reviewPartialFile(ctx context.Context, explain Explainer, repoPath string, 
 		item.line += ". Смысловая сверка не прочитана"
 		return item
 	}
-	seen := false
+	attempt := false
+	trivial := false
 	for _, ans := range answers {
 		if ans.yes && quoteInExcerpt(excerptLines, ans.quote) {
-			seen = true
-			break
+			attempt = true
+		}
+		if ans.trivial && quoteInHunks(got.hunks, send, ans.quote) {
+			trivial = true
 		}
 	}
-	if !seen {
+	if !attempt && !trivial {
 		item.line += ". Смысловая сверка не увидела попытку внести патч"
 		return item
 	}
 	_, line := patchedFileLine(file.Filename, got.counted, got.counted, got.ignored)
-	line += ". Смысловая сверка увидела попытку внести патч, которую построчное сравнение не зачло"
+	if attempt {
+		line += ". Смысловая сверка увидела попытку внести патч, которую построчное сравнение не зачло"
+	} else {
+		line += ". Смысловая сверка посчитала оставшиеся правки несущественными"
+	}
 	return patchItem{name: file.Filename, status: "full", line: line}
 }
 
@@ -129,11 +167,14 @@ func meaningPrompt(filename, hunksText, code string) string {
 Не каждый фрагмент обязан присутствовать. Имена могут быть другими: код уже могли менять предыдущие патчи. Порядок строк, отступы, пустые строки и комментарии не важны. Соседние строки могут стоять иначе. Сомнение — это «да»: похожая правка считается попыткой внести этот патч.
 «Нет» — только когда попытки не видно совсем.
 
+Если оставшиеся правки не несут сути уязвимости — время, дата, штамп генерации, версия в комментарии — это не попытка и не дырка. Ответ тогда «несущественно». Одна настоящая правка — условие, лимит, проверка, вызов — не пустяк: если её попытки не видно, ответ «нет».
+
 Ответ — одна строка и ничего больше:
 да | строка из кода, где видна попытка
+несущественно | строка из правки, которая не несёт сути
 нет
 
-Для «да» после вертикальной черты приведи строку из приведённого кода. Без этой строки ответ не принимается.
+Для «да» после вертикальной черты приведи строку из приведённого кода. Для «несущественно» — строку из приведённых правок. Без этой строки ответ не принимается.
 
 Файл: %s
 
@@ -163,6 +204,20 @@ func renderAskedHunks(hunks []diffHunk, idxs []int) string {
 	return b.String()
 }
 
+func quoteInHunks(hunks []diffHunk, idxs []int, quote string) bool {
+	var lines []string
+	for _, idx := range idxs {
+		if idx < 0 || idx >= len(hunks) {
+			continue
+		}
+		if hunks[idx].header != "" {
+			lines = append(lines, hunks[idx].header)
+		}
+		lines = append(lines, hunks[idx].raw...)
+	}
+	return quoteInExcerpt(lines, quote)
+}
+
 func parseMeaning(text string) []meaningAnswer {
 	var out []meaningAnswer
 	for _, line := range strings.Split(text, "\n") {
@@ -174,7 +229,12 @@ func parseMeaning(text string) []meaningAnswer {
 		}
 		quote := strings.TrimSpace(m[2])
 		quote = strings.Trim(quote, "`")
-		out = append(out, meaningAnswer{yes: strings.EqualFold(m[1], "да"), quote: strings.TrimSpace(quote)})
+		word := strings.ToLower(m[1])
+		out = append(out, meaningAnswer{
+			yes:     word == "да",
+			trivial: word == "несущественно",
+			quote:   strings.TrimSpace(quote),
+		})
 	}
 	return out
 }

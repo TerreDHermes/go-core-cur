@@ -252,6 +252,42 @@ func TestOneDeadcodeRunCoversEverySymbol(t *testing.T) {
 	}
 }
 
+func TestDeletedPatchFuncIsNotTreatedAsLive(t *testing.T) {
+	calls := 0
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		calls++
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{}}
+	})
+	defer restore()
+
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+	rel := "pkg/buf.go"
+	mustWrite(t, filepath.Join(root, rel), "package buf\n\nfunc (t throttledItem) isThrottled() bool { return true }\n")
+	diff := "" +
+		"@@ func (s *registerStream) isTransportResponseFrame() bool {\n" +
+		"-func (s *registerStream) isTransportResponseFrame() bool { return false }\n" +
+		"@@ func (t throttledItem) isThrottled() bool {\n" +
+		"+func (t throttledItem) isThrottled() bool { return true }\n"
+	report := analyzeReach(context.Background(), root, []task.PatchFile{{
+		Filename: "pkg/buf.go",
+		Patch:    diff,
+	}}, []task.PatchFileMatch{{
+		Filename: "pkg/buf.go",
+		Found:    true,
+		Path:     "./" + rel,
+	}})
+	if calls != 1 || len(report.Functions) != 1 {
+		t.Fatalf("calls %d funcs %+v", calls, report.Functions)
+	}
+	if !strings.Contains(report.Functions[0].Symbol, "isThrottled") || strings.Contains(report.Functions[0].Symbol, "isTransportResponseFrame") {
+		t.Fatal(report.Functions[0].Symbol)
+	}
+	if report.Functions[0].Status != "live" {
+		t.Fatal(report.Functions[0].Status)
+	}
+}
+
 func TestTimeoutDetailStaysUnknown(t *testing.T) {
 	detail := unknownDetail([]task.ReachFunc{{
 		Status: "failed",
