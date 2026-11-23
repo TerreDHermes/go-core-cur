@@ -191,9 +191,10 @@ const formatDuration = (ms) => {
   const hours = Math.floor(totalSec / 3600);
   const minutes = Math.floor((totalSec % 3600) / 60);
   const seconds = totalSec % 60;
-  if (hours > 0) return minutes ? `${hours} ч ${minutes} мин` : `${hours} ч`;
-  if (minutes > 0) return seconds ? `${minutes} мин ${seconds} с` : `${minutes} мин`;
-  return `${seconds} с`;
+  const two = (value) => String(value).padStart(2, '0');
+  if (hours > 0) return minutes ? `${hours} ч ${two(minutes)} мин` : `${hours} ч`;
+  if (minutes > 0) return `${two(minutes)} мин ${two(seconds)} с`;
+  return `${two(seconds)} с`;
 };
 
 const showDuration = (status, ms) => status && status !== 'PENDING' && formatDuration(ms) !== '';
@@ -1126,19 +1127,19 @@ export default function ApplicabilityAnalysis() {
       <div style={fullPageStyle}>
         <div style={boardContainerStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '3rem', flexWrap: 'wrap', gap: '1.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: theme.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 8px 16px -4px rgba(37, 99, 235, 0.25)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', minWidth: 0, flex: '1 1 0%' }}>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: theme.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', boxShadow: '0 8px 16px -4px rgba(37, 99, 235, 0.25)', flexShrink: 0 }}>
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
               </div>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>Детали анализа</h1>
-                <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem' }}>
+                <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem', fontVariantNumeric: 'tabular-nums' }}>
                   ID: {currentTask.id.slice(0, 8)}... • {formatDateTime(currentTask.created_at)}
                   {showDuration(currentTask.status, currentTask.duration_ms) ? ` • ${durationText}` : ''}
                 </p>
               </div>
             </div>
-            <div style={navBtnGroupStyle}>
+            <div style={{ ...navBtnGroupStyle, marginLeft: 'auto' }}>
               <button onClick={() => window.location.href = '/analysis/list'} style={listNavBtnStyle} onMouseEnter={e => { e.currentTarget.style.backgroundColor = theme.primary; e.currentTarget.style.color = '#fff'; }} onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.color = theme.primary; }}>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>
                 Список анализов
