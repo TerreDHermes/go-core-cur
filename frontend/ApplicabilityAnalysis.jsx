@@ -3,6 +3,25 @@ import { useParams, useLocation } from 'react-router-dom';
 
 const API_BASE = '/api/v1/analysis';
 const STOPPED_MESSAGE = 'Остановлен принудительно нажатием на кнопку "Остановить анализ"';
+const LAST_MODEL_KEY = 'cve-verdict-last-model';
+
+const readLastModel = () => {
+  try {
+    return (localStorage.getItem(LAST_MODEL_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+const rememberModel = (model) => {
+  const name = (model || '').trim();
+  if (!name) return;
+  try {
+    localStorage.setItem(LAST_MODEL_KEY, name);
+  } catch {
+    // Запуск не зависит от того, смог ли браузер сохранить выбор.
+  }
+};
 
 const apiService = {
   createTask: async (data) => {
@@ -773,7 +792,7 @@ export default function ApplicabilityAnalysis() {
   const itemsPerPage = 10;
 
   const [selectedModuleIndex, setSelectedModuleIndex] = useState(0);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState(readLastModel);
   const [currentGo, setCurrentGo] = useState(undefined);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState('');
@@ -911,6 +930,7 @@ export default function ApplicabilityAnalysis() {
 
     try {
       const result = await apiService.createTask({ ...formData, model: selectedModel });
+      rememberModel(selectedModel);
       window.location.href = `/analysis/${result.id}`;
     } catch (err) {
       setCreateError(err.message || 'Произошла неизвестная ошибка при создании задачи');

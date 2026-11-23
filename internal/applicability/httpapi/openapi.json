@@ -23,7 +23,7 @@
         "tags": ["analysis"],
         "operationId": "defaultAnalysisModel",
         "summary": "Модель по умолчанию",
-        "description": "Имя из AI_MODEL. Форма показывает его до выбора другой модели.",
+        "description": "Имя из AI_MODEL. Форма показывает его, пока в этом браузере не запомнен последний успешный запуск.",
         "responses": {
           "200": {
             "description": "Модель из окружения",
