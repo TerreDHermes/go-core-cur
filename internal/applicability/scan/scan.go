@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"cve-patch-viewer/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/verdictmark"
 )
 
 type Input struct {
@@ -326,8 +327,8 @@ func finish(ctx context.Context, in Input, results []task.ModuleResult, explain 
 		if text == "" {
 			return nil, fmt.Errorf("ai verdict for %s is empty", results[i].GoModPath)
 		}
-		results[i].Verdict = text
 		kind := decideApplicability(results[i].ReportMD, text)
+		results[i].Verdict = verdictmark.Stamp(text)
 		results[i].Applicability = kind
 		results[i].ReportMD.Applicability = kind
 		noteAt(ctx, "журнал модели", results[i].GoModPath, i+1, len(results))

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"cve-patch-viewer/internal/applicability/task"
+	"cve-patch-viewer/internal/applicability/verdictmark"
 )
 
 func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
@@ -135,6 +136,9 @@ func TestScanNotGoGrepsPatchAndReadsNotes(t *testing.T) {
 	}
 	if got[0].ReportMD.Narrative != "narrative-text" || !strings.HasPrefix(got[0].Verdict, "Потенциальная уязвимость") || !strings.Contains(got[0].Verdict, "model-verdict") {
 		t.Fatalf("verdict %q narrative %q", got[0].Verdict, got[0].ReportMD.Narrative)
+	}
+	if !verdictmark.Ours(got[0].Verdict) || verdictmark.Ours(got[0].ReportMD.PreVerdict) || verdictmark.Ours(got[0].ReportMD.Narrative) || strings.Contains(ai.prompts[1], verdictmark.Mark) {
+		t.Fatal("mark should stay on the verdict only")
 	}
 }
 
