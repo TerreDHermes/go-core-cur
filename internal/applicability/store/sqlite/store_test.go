@@ -375,6 +375,75 @@ func TestReviewRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLatestIDMatchesSpellingsAndAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := st.Create(ctx, task.Task{
+		ID: "old", Status: task.StatusCompleted,
+		ComponentURL: "git@git.slo:dapp/dapp-grafana.git",
+		Branch:       "main", CVEID: "GHSA-q7gw-24fr-5p69", PackageName: "pkg",
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`UPDATE analysis_tasks SET component_key = '' WHERE id = 'old'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	id, err := st.LatestID(ctx, "https://git.slo/dapp/dapp-grafana", "main", "ghsa-q7gw-24fr-5p69", "pkg")
+	if err != nil || id != "old" {
+		t.Fatalf("id %s err %v", id, err)
+	}
+	if _, err := st.LatestID(ctx, "https://git.slo/dapp/dapp-grafana.git", "Main", "GHSA-q7gw-24fr-5p69", "pkg"); !errors.Is(err, task.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := st.LatestID(ctx, "https://git.slo/dapp/dapp-grafana.git", "main", "CVE-2026-128085", "pkg"); !errors.Is(err, task.ErrNotFound) {
+		t.Fatal(err)
+	}
+	primary, aliases := task.CVEIdentity("GHSA-q7gw-24fr-5p69", task.CVEPatch{
+		CVE:     "GO-2026-6974",
+		Aliases: []string{"CVE-2026-128085", "GHSA-q7gw-24fr-5p69"},
+	})
+	if err := st.SaveCVEIdentity(ctx, "old", primary, aliases); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CVEID != "CVE-2026-128085" || got.ComponentURL != "git@git.slo:dapp/dapp-grafana.git" {
+		t.Fatalf("%+v", got)
+	}
+	for _, cve := range []string{"cve-2026-128085", "GO-2026-6974", "ghsa-q7gw-24fr-5p69"} {
+		id, err := st.LatestID(ctx, "ssh://git@git.slo/dapp/dapp-grafana/", "main", cve, "pkg")
+		if err != nil || id != "old" {
+			t.Fatalf("%s -> %s %v", cve, id, err)
+		}
+	}
+	if _, err := st.LatestID(ctx, "https://git.slo/dapp/dapp-grafana.git", "main", "CVE-2026-1280850", "pkg"); !errors.Is(err, task.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if _, err := st.LatestID(ctx, "https://git.slo/dapp/dapp-grafana.git", "main", "CVE-2026-12808", "pkg"); !errors.Is(err, task.ErrNotFound) {
+		t.Fatal(err)
+	}
+	listed, err := st.List(ctx, task.ListQuery{CVEID: "GO-2026-6974"}, 10, 0)
+	if err != nil || len(listed) != 1 || listed[0].ID != "old" {
+		t.Fatalf("%+v %v", listed, err)
+	}
+}
+
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "t.db"))

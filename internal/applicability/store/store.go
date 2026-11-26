@@ -16,6 +16,7 @@ type Store interface {
 	SaveCloneMS(ctx context.Context, id string, ms int64) error
 	SaveProgress(ctx context.Context, id string, goMods *int, stage string) error
 	SetModel(ctx context.Context, id, model string) error
+	SaveCVEIdentity(ctx context.Context, id, primary string, aliases []string) error
 	RequeueRunning(ctx context.Context, updatedAt string) ([]string, error)
 	Get(ctx context.Context, id string) (task.Task, error)
 	LatestID(ctx context.Context, componentURL, branch, cveID, packageName string) (string, error)

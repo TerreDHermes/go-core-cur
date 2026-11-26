@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"cve-patch-viewer/internal/applicability/gitrepo"
 	"cve-patch-viewer/internal/applicability/store"
 	"cve-patch-viewer/internal/applicability/task"
 
@@ -46,7 +47,7 @@ type ListFilter struct {
 }
 
 func (s *Service) Create(ctx context.Context, in task.CreateInput) (string, error) {
-	in.ComponentURL = strings.TrimSpace(in.ComponentURL)
+	in.ComponentURL = gitrepo.CanonicalRepoURL(in.ComponentURL)
 	in.Branch = strings.TrimSpace(in.Branch)
 	in.CVEID = strings.TrimSpace(in.CVEID)
 	in.PackageName = strings.TrimSpace(in.PackageName)
@@ -122,7 +123,7 @@ func (s *Service) Check(ctx context.Context, in task.CreateInput) (string, error
 }
 
 func normalizeKey(in task.CreateInput) (task.CreateInput, error) {
-	in.ComponentURL = strings.TrimSpace(in.ComponentURL)
+	in.ComponentURL = gitrepo.CanonicalRepoURL(in.ComponentURL)
 	in.Branch = strings.TrimSpace(in.Branch)
 	in.CVEID = strings.TrimSpace(in.CVEID)
 	in.PackageName = strings.TrimSpace(in.PackageName)

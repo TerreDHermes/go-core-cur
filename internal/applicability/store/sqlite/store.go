@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"cve-patch-viewer/internal/applicability/gitrepo"
 	"cve-patch-viewer/internal/applicability/task"
 
 	_ "modernc.org/sqlite"
@@ -61,13 +62,49 @@ func ensureColumns(db *sql.DB) error {
 		`ALTER TABLE analysis_tasks ADD COLUMN rating INTEGER`,
 		`ALTER TABLE analysis_tasks ADD COLUMN review TEXT`,
 		`ALTER TABLE analysis_tasks ADD COLUMN reviewed_at TEXT`,
+		`ALTER TABLE analysis_tasks ADD COLUMN component_key TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDupColumn(err) {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	if err := backfillComponentKeys(db); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_analysis_tasks_key`); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX idx_analysis_tasks_key ON analysis_tasks (component_key, branch, package_name, created_at)`); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
 	for _, column := range []string{"finished_at"} {
 		if _, err := db.Exec(`ALTER TABLE analysis_tasks DROP COLUMN ` + column); err != nil && !isMissingColumn(err) {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
+	return nil
+}
+
+func backfillComponentKeys(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, component_url FROM analysis_tasks WHERE component_key = ''`)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	defer rows.Close()
+	type pair struct{ id, key string }
+	var pending []pair
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+		pending = append(pending, pair{id, gitrepo.CanonicalRepoURL(raw)})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	for _, item := range pending {
+		if _, err := db.Exec(`UPDATE analysis_tasks SET component_key = ? WHERE id = ?`, item.key, item.id); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
@@ -89,10 +126,10 @@ func (s *Store) Close() error {
 func (s *Store) Create(ctx context.Context, t task.Task) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO analysis_tasks (
-			id, status, component_url, branch, cve_id, package_name, model,
+			id, status, component_url, component_key, branch, cve_id, package_name, model,
 			error_msg, created_at, updated_at, applicability
-		) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULLIF(?, ''))`,
-		t.ID, string(t.Status), t.ComponentURL, t.Branch, t.CVEID, t.PackageName, t.Model,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULLIF(?, ''))`,
+		t.ID, string(t.Status), t.ComponentURL, gitrepo.CanonicalRepoURL(t.ComponentURL), t.Branch, t.CVEID, t.PackageName, t.Model,
 		t.CreatedAt, t.UpdatedAt, t.Applicability,
 	)
 	if err != nil {
@@ -323,9 +360,16 @@ func (s *Store) LatestID(ctx context.Context, componentURL, branch, cveID, packa
 	var id string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id FROM analysis_tasks
-		WHERE component_url = ? AND branch = ? AND cve_id = ? AND package_name = ?
+		WHERE component_key = ? AND branch = ? AND package_name = ?
+		  AND (
+		    lower(cve_id) = lower(?)
+		    OR EXISTS (
+		      SELECT 1 FROM analysis_task_aliases
+		      WHERE task_id = analysis_tasks.id AND alias = lower(?)
+		    )
+		  )
 		ORDER BY created_at DESC, rowid DESC
-		LIMIT 1`, componentURL, branch, cveID, packageName).Scan(&id)
+		LIMIT 1`, gitrepo.CanonicalRepoURL(componentURL), branch, packageName, cveID, cveID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", task.ErrNotFound
 	}
@@ -333,6 +377,54 @@ func (s *Store) LatestID(ctx context.Context, componentURL, branch, cveID, packa
 		return "", fmt.Errorf("latest task: %w", err)
 	}
 	return id, nil
+}
+
+func (s *Store) SaveCVEIdentity(ctx context.Context, id, primary string, aliases []string) error {
+	primary = strings.TrimSpace(primary)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("save cve identity: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE analysis_tasks SET cve_id = ? WHERE id = ?`, primary, id)
+	if err != nil {
+		return fmt.Errorf("save cve identity: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("save cve identity: %w", err)
+	}
+	if n == 0 {
+		return task.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM analysis_task_aliases WHERE task_id = ?`, id); err != nil {
+		return fmt.Errorf("save cve identity: %w", err)
+	}
+	seen := map[string]bool{}
+	write := func(alias string) error {
+		alias = strings.ToLower(strings.TrimSpace(alias))
+		if alias == "" || seen[alias] {
+			return nil
+		}
+		seen[alias] = true
+		_, err := tx.ExecContext(ctx, `INSERT INTO analysis_task_aliases (task_id, alias) VALUES (?, ?)`, id, alias)
+		if err != nil {
+			return fmt.Errorf("save cve identity: %w", err)
+		}
+		return nil
+	}
+	if err := write(primary); err != nil {
+		return err
+	}
+	for _, alias := range aliases {
+		if err := write(alias); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("save cve identity: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) List(ctx context.Context, query task.ListQuery, limit, offset int) ([]task.Task, error) {
@@ -396,8 +488,11 @@ func listWhere(q task.ListQuery) (string, []any) {
 		args = append(args, q.Branch)
 	}
 	if q.CVEID != "" {
-		conds = append(conds, "lower(cve_id) = lower(?)")
-		args = append(args, q.CVEID)
+		conds = append(conds, `(lower(cve_id) = lower(?) OR EXISTS (
+			SELECT 1 FROM analysis_task_aliases
+			WHERE task_id = analysis_tasks.id AND alias = lower(?)
+		))`)
+		args = append(args, q.CVEID, q.CVEID)
 	}
 	if q.PackageName != "" {
 		conds = append(conds, "lower(package_name) = lower(?)")

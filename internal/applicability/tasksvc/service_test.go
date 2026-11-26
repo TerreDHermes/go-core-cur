@@ -119,7 +119,7 @@ func TestOpenReusesLatestOrCreates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Model != "env-model" || got.ComponentURL != "https://example.com/r" || got.Status != task.StatusPending {
+	if got.Model != "env-model" || got.ComponentURL != "https://example.com/r.git" || got.Status != task.StatusPending {
 		t.Fatalf("%+v", got)
 	}
 
@@ -155,6 +155,81 @@ func TestOpenReusesLatestOrCreates(t *testing.T) {
 	_, err = svc.Open(ctx, task.CreateInput{ComponentURL: "https://example.com/r"})
 	if !errors.Is(err, task.ErrInvalidInput) {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenMatchesCanonicalURLAndSavedAliases(t *testing.T) {
+	st, err := sqlite.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	svc := New(st, &recordingQueue{})
+	ctx := context.Background()
+	first, err := svc.Open(ctx, task.CreateInput{
+		ComponentURL: "git@git.slo:dapp/dapp-grafana.git",
+		Branch:       "main",
+		CVEID:        "GHSA-q7gw-24fr-5p69",
+		PackageName:  "pkg",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get(ctx, first)
+	if err != nil || got.ComponentURL != "https://git.slo/dapp/dapp-grafana.git" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	again, err := svc.Open(ctx, task.CreateInput{
+		ComponentURL: "https://Git.Slo/dapp/dapp-grafana/",
+		Branch:       "main",
+		CVEID:        "ghsa-q7gw-24fr-5p69",
+		PackageName:  "pkg",
+	})
+	if err != nil || again != first {
+		t.Fatalf("again %s err %v", again, err)
+	}
+	other, err := svc.Create(ctx, task.CreateInput{
+		ComponentURL: "https://git.slo/dapp/dapp-grafana.git",
+		Branch:       "main",
+		CVEID:        "GHSA-q7gw-24fr-5p69",
+		PackageName:  "pkg",
+	})
+	if err != nil || other == first {
+		t.Fatalf("create %s err %v", other, err)
+	}
+	casePkg, err := svc.Open(ctx, task.CreateInput{
+		ComponentURL: "https://git.slo/dapp/dapp-grafana.git",
+		Branch:       "main",
+		CVEID:        "GHSA-q7gw-24fr-5p69",
+		PackageName:  "Pkg",
+	})
+	if err != nil || casePkg == first {
+		t.Fatalf("package %s err %v", casePkg, err)
+	}
+	missing, err := svc.Check(ctx, task.CreateInput{
+		ComponentURL: "https://git.slo/dapp/dapp-grafana",
+		Branch:       "main",
+		CVEID:        "CVE-2026-128085",
+		PackageName:  "pkg",
+	})
+	if err != nil || missing != task.CheckNotStarted {
+		t.Fatalf("before card %s %v", missing, err)
+	}
+	primary, aliases := task.CVEIdentity("GHSA-q7gw-24fr-5p69", task.CVEPatch{
+		CVE:     "GO-2026-6974",
+		Aliases: []string{"CVE-2026-128085", "GHSA-q7gw-24fr-5p69"},
+	})
+	if err := st.SaveCVEIdentity(ctx, first, primary, aliases); err != nil {
+		t.Fatal(err)
+	}
+	found, err := svc.Open(ctx, task.CreateInput{
+		ComponentURL: "ssh://git@git.slo/dapp/dapp-grafana",
+		Branch:       "main",
+		CVEID:        "CVE-2026-128085",
+		PackageName:  "pkg",
+	})
+	if err != nil || found != first {
+		t.Fatalf("found %s err %v", found, err)
 	}
 }
 

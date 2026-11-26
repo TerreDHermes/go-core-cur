@@ -240,8 +240,19 @@ func fetchPatch(ctx context.Context, patches PatchSource, cveID string) (task.CV
 	if err != nil {
 		return task.CVEPatch{}, fmt.Errorf("cve patch for: %w", err)
 	}
+	if fn, ok := ctx.Value(patchSeenKey{}).(func(task.CVEPatch)); ok && fn != nil {
+		fn(patch)
+	}
 	patch.Files = codePatchFiles(patch.Files)
 	return patch, nil
+}
+
+type patchSeenKey struct{}
+
+// WithPatchSeen calls fn with the card as soon as the patch service answers,
+// before files that are not code are dropped.
+func WithPatchSeen(ctx context.Context, fn func(task.CVEPatch)) context.Context {
+	return context.WithValue(ctx, patchSeenKey{}, fn)
 }
 
 func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit bool, explain Explainer) (task.ModuleResult, bool) {

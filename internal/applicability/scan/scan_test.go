@@ -73,9 +73,10 @@ func TestScanKeepsOnlyGoModThatListsPackage(t *testing.T) {
 }
 
 type fakePatch struct {
-	cve   string
-	files []task.PatchFile
-	fixed []string
+	cve     string
+	aliases []string
+	files   []task.PatchFile
+	fixed   []string
 }
 
 func (f fakePatch) Fetch(context.Context, string) (task.CVEPatch, error) {
@@ -83,7 +84,29 @@ func (f fakePatch) Fetch(context.Context, string) (task.CVEPatch, error) {
 	if files == nil {
 		files = []task.PatchFile{{Filename: "a.go", Patch: "diff"}}
 	}
-	return task.CVEPatch{CVE: f.cve, Files: files, FixedVersions: f.fixed}, nil
+	return task.CVEPatch{CVE: f.cve, Aliases: f.aliases, Files: files, FixedVersions: f.fixed}, nil
+}
+
+func TestFetchPatchReportsTheCardBeforeDroppingDocs(t *testing.T) {
+	var seen task.CVEPatch
+	ctx := WithPatchSeen(context.Background(), func(patch task.CVEPatch) { seen = patch })
+	got, err := fetchPatch(ctx, fakePatch{
+		cve:     "GO-2026-1",
+		aliases: []string{"CVE-2026-1"},
+		files: []task.PatchFile{
+			{Filename: "README.md", Patch: "docs"},
+			{Filename: "a.go", Patch: "diff"},
+		},
+	}, "GHSA-aaaa-bbbb-cccc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.CVE != "GO-2026-1" || len(seen.Aliases) != 1 || len(seen.Files) != 2 {
+		t.Fatalf("%+v", seen)
+	}
+	if len(got.Files) != 1 || got.Files[0].Filename != "a.go" {
+		t.Fatalf("%+v", got.Files)
+	}
 }
 
 func TestScanNotGoGrepsPatchAndReadsNotes(t *testing.T) {

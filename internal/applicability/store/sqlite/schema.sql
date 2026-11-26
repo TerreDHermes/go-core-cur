@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL CHECK (status IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED')),
     component_url TEXT NOT NULL,
+    component_key TEXT NOT NULL DEFAULT '',
     branch TEXT NOT NULL,
     cve_id TEXT NOT NULL,
     package_name TEXT NOT NULL,
@@ -25,8 +26,15 @@ CREATE TABLE IF NOT EXISTS analysis_tasks (
 CREATE INDEX IF NOT EXISTS idx_analysis_tasks_status_created_at
     ON analysis_tasks (status, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_analysis_tasks_key
-    ON analysis_tasks (component_url, branch, cve_id, package_name, created_at);
+CREATE TABLE IF NOT EXISTS analysis_task_aliases (
+    task_id TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    PRIMARY KEY (task_id, alias),
+    FOREIGN KEY (task_id) REFERENCES analysis_tasks (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_task_aliases_alias
+    ON analysis_task_aliases (alias);
 
 CREATE TABLE IF NOT EXISTS analysis_task_modules (
     task_id TEXT NOT NULL,

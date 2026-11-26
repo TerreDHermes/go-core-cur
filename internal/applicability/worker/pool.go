@@ -164,6 +164,12 @@ func (p *Pool) handle(id string) {
 	ctx = ai.WithCallStats(ctx, stats)
 	prog := scan.NewProgress()
 	ctx = scan.WithProgress(ctx, prog)
+	ctx = scan.WithPatchSeen(ctx, func(patch task.CVEPatch) {
+		primary, aliases := task.CVEIdentity(t.CVEID, patch)
+		if err := p.store.SaveCVEIdentity(context.Background(), id, primary, aliases); err != nil {
+			log.Error("save cve identity", "err", err)
+		}
+	})
 	p.cancels.Store(id, cancel)
 	defer func() {
 		cancel()
