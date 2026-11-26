@@ -305,6 +305,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		StopStage:     t.StopStage,
 		Rating:        t.Rating,
 		Review:        t.Review,
+		PatchFiles:    task.VisiblePatchFiles(t.Modules),
 	})
 }
 
@@ -420,29 +421,30 @@ func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 type taskResponse struct {
-	ID            string           `json:"id"`
-	Status        string           `json:"status"`
-	ComponentURL  string           `json:"component_url"`
-	Branch        string           `json:"branch"`
-	CVEID         string           `json:"cve_id"`
-	PackageName   string           `json:"package_name"`
-	Model         string           `json:"model"`
-	Modules       []moduleResponse `json:"modules"`
-	ErrorMsg      string           `json:"error_msg"`
-	ErrorSource   string           `json:"error_source,omitempty"`
-	ErrorHint     string           `json:"error_hint,omitempty"`
-	CreatedAt     string           `json:"created_at"`
-	UpdatedAt     string           `json:"updated_at"`
-	DurationMS    *int64           `json:"duration_ms"`
-	Applicability *string          `json:"applicability"`
-	AICalls       int              `json:"ai_calls"`
-	AIMinMS       *int64           `json:"ai_min_ms"`
-	AIMaxMS       *int64           `json:"ai_max_ms"`
-	CloneMS       *int64           `json:"clone_ms"`
-	GoModCount    *int             `json:"go_mod_count"`
-	StopStage     string           `json:"stop_stage"`
-	Rating        *int             `json:"rating"`
-	Review        string           `json:"review"`
+	ID            string               `json:"id"`
+	Status        string               `json:"status"`
+	ComponentURL  string               `json:"component_url"`
+	Branch        string               `json:"branch"`
+	CVEID         string               `json:"cve_id"`
+	PackageName   string               `json:"package_name"`
+	Model         string               `json:"model"`
+	Modules       []moduleResponse     `json:"modules"`
+	ErrorMsg      string               `json:"error_msg"`
+	ErrorSource   string               `json:"error_source,omitempty"`
+	ErrorHint     string               `json:"error_hint,omitempty"`
+	CreatedAt     string               `json:"created_at"`
+	UpdatedAt     string               `json:"updated_at"`
+	DurationMS    *int64               `json:"duration_ms"`
+	Applicability *string              `json:"applicability"`
+	AICalls       int                  `json:"ai_calls"`
+	AIMinMS       *int64               `json:"ai_min_ms"`
+	AIMaxMS       *int64               `json:"ai_max_ms"`
+	CloneMS       *int64               `json:"clone_ms"`
+	GoModCount    *int                 `json:"go_mod_count"`
+	StopStage     string               `json:"stop_stage"`
+	Rating        *int                 `json:"rating"`
+	Review        string               `json:"review"`
+	PatchFiles    []task.PatchFileView `json:"patch_files"`
 }
 
 type moduleResponse struct {

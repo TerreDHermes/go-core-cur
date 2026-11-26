@@ -46,7 +46,15 @@ func (f fakeSvc) Get(context.Context, string) (task.Task, error) {
 			GoModPath:     "./go.mod",
 			Verdict:       "found",
 			Applicability: task.Applicable,
-			ReportMD:      task.Report{GoModPath: "./go.mod", Narrative: "сначала проверили дерево", Applicability: task.Applicable},
+			ReportMD: task.Report{
+				GoModPath: "./go.mod", Narrative: "сначала проверили дерево", Applicability: task.Applicable,
+				Patch: task.CVEPatch{Files: []task.PatchFile{
+					{Filename: "src/net/http/server.go", Patch: "diff-server"},
+				}},
+				PatchFiles: []task.PatchFileMatch{
+					{Filename: "src/net/http/server.go", Found: true, Path: "./vendor/golang.org/x/net/http/server.go"},
+				},
+			},
 		}},
 		Applicability: task.Applicable,
 		CreatedAt:     "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:01Z",
@@ -244,6 +252,9 @@ func TestCreateAndList(t *testing.T) {
 		t.Fatal(body)
 	}
 	if strings.Contains(body, `"go_version"`) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, `"path":"vendor/golang.org/x/net/http/server.go"`) || !strings.Contains(body, `"patch":"diff-server"`) {
 		t.Fatal(body)
 	}
 }

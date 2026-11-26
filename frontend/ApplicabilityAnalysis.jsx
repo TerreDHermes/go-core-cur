@@ -750,6 +750,22 @@ function savedGoVersions(task) {
   return rows.map((row) => `${row.path}: ${row.version}`).join('\n');
 }
 
+function diffLines(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
+
+function diffLineStyle(line) {
+  if (line.startsWith('@@')) return { background: '#EFF6FF', color: '#1D4ED8' };
+  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ')) {
+    return { background: 'transparent', color: theme.textMuted };
+  }
+  if (line.startsWith('+')) return { background: theme.success.bg, color: theme.success.text };
+  if (line.startsWith('-')) return { background: theme.error.bg, color: theme.error.text };
+  return { background: 'transparent', color: theme.textMain };
+}
+
 export default function ApplicabilityAnalysis() {
   const location = useLocation();
   const { taskId } = useParams();
@@ -771,6 +787,9 @@ export default function ApplicabilityAnalysis() {
 
   const [currentTask, setCurrentTask] = useState(null);
   const [copiedVerdict, setCopiedVerdict] = useState(false);
+  const [patchOpen, setPatchOpen] = useState(false);
+  const [patchFile, setPatchFile] = useState(0);
+  const [copiedPatch, setCopiedPatch] = useState(false);
   const [createError, setCreateError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [taskList, setTaskList] = useState([]);
@@ -796,6 +815,12 @@ export default function ApplicabilityAnalysis() {
   const [currentGo, setCurrentGo] = useState(undefined);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState('');
+
+  useEffect(() => {
+    setPatchOpen(false);
+    setPatchFile(0);
+    setCopiedPatch(false);
+  }, [taskId]);
 
   const isReviewsView = location.pathname.includes('/reviews');
   const isListView = !isReviewsView && location.pathname.includes('/list');
@@ -970,33 +995,46 @@ export default function ApplicabilityAnalysis() {
     window.location.href = '/analysis';
   };
 
+  const copyText = (value, onDone) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = value;
+    textArea.setAttribute('readonly', '');
+    textArea.style.position = 'fixed';
+    textArea.style.top = '0';
+    textArea.style.left = '0';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    textArea.setSelectionRange(0, textArea.value.length);
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+    document.body.removeChild(textArea);
+    if (ok) {
+      onDone();
+      return;
+    }
+    const write = navigator.clipboard?.writeText;
+    if (!write) return;
+    write.call(navigator.clipboard, value).then(onDone).catch((err) => console.error('Failed to copy:', err));
+  };
+
   const handleCopyVerdict = async () => {
     const activeModule = currentTask?.modules?.[selectedModuleIndex];
     if (!activeModule?.verdict) return;
 
-    // Старый надежный способ копирования, работающий даже по HTTP
-    const textArea = document.createElement("textarea");
-    textArea.value = activeModule.verdict;
-    
-    // Делаем элемент невидимым, но добавляем в DOM
-    textArea.style.position = "fixed";
-    textArea.style.left = "-9999px";
-    document.body.appendChild(textArea);
-    
-    // Выделяем текст и копируем
-    textArea.focus();
-    textArea.select();
-    
-    try {
-      document.execCommand('copy');
-      setCopiedVerdict(true);
-      setTimeout(() => setCopiedVerdict(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    } finally {
-      // Удаляем временный элемент
-      document.body.removeChild(textArea);
-    }
+    copyText(activeModule.verdict, () => setCopiedVerdict(true));
+  };
+
+  const handleCopyPatch = () => {
+    const files = Array.isArray(currentTask?.patch_files) ? currentTask.patch_files : [];
+    const file = files[Math.min(patchFile, files.length - 1)];
+    if (!file?.patch) return;
+    copyText(file.patch, () => setCopiedPatch(true));
   };
 
   const renderStatusBadge = (status) => {
@@ -1425,6 +1463,91 @@ export default function ApplicabilityAnalysis() {
               </div>
             )}
           </div>
+
+          {!isPending && !isRunning && (() => {
+            const patchFiles = Array.isArray(currentTask.patch_files) ? currentTask.patch_files : [];
+            const safeIndex = patchFiles.length === 0 ? 0 : Math.min(patchFile, patchFiles.length - 1);
+            const activePatch = patchFiles[safeIndex];
+            const lines = diffLines(activePatch?.patch);
+            return (
+              <div style={{ marginBottom: '2.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: patchOpen ? '1.25rem' : 0, flexWrap: 'wrap' }}>
+                  <h2 style={{ fontSize: '1.35rem', fontWeight: '800', margin: 0, color: theme.textMain }}>Патч</h2>
+                  <button
+                    type="button"
+                    onClick={() => { setPatchOpen((open) => !open); setCopiedPatch(false); }}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                      padding: '0.6rem 1.25rem', borderRadius: '0.75rem',
+                      border: `1px solid ${theme.primary}`, background: patchOpen ? '#ffffff' : theme.primary,
+                      color: patchOpen ? theme.primary : '#ffffff', fontSize: '0.95rem', fontWeight: '700',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {patchOpen ? 'Свернуть патч' : 'Показать патч'}
+                  </button>
+                </div>
+                {patchOpen && (patchFiles.length === 0 ? (
+                  <div style={{ padding: '2.5rem', textAlign: 'center', color: theme.textMuted, fontWeight: '600', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
+                    Патч не найден
+                  </div>
+                ) : (
+                  <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.7)', borderRadius: '1rem', border: `1px solid rgba(203, 213, 225, 0.8)`, overflow: 'hidden' }}>
+                    {patchFiles.length > 1 && (
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', padding: '1rem 1.25rem', borderBottom: `1px solid ${theme.border}`, backgroundColor: 'rgba(248, 250, 252, 0.8)' }}>
+                        {patchFiles.map((file, idx) => {
+                          const selected = idx === safeIndex;
+                          return (
+                            <button
+                              key={`${file.path}-${idx}`}
+                              type="button"
+                              onClick={() => { setPatchFile(idx); setCopiedPatch(false); }}
+                              style={{
+                                maxWidth: '100%', textAlign: 'left', wordBreak: 'break-all',
+                                padding: '0.45rem 0.8rem', borderRadius: '0.6rem',
+                                border: `1px solid ${selected ? theme.primary : theme.border}`,
+                                background: selected ? theme.primary : '#ffffff',
+                                color: selected ? '#ffffff' : theme.textMain,
+                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                                fontSize: '0.82rem', fontWeight: '600', cursor: 'pointer'
+                              }}
+                            >
+                              {file.path}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', padding: '1rem 1.25rem', borderBottom: `1px solid ${theme.border}`, flexWrap: 'wrap' }}>
+                      <span style={{ wordBreak: 'break-all', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: '0.92rem', fontWeight: '700', color: theme.textMain }}>{activePatch.path}</span>
+                      <button
+                        type="button"
+                        onClick={handleCopyPatch}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0,
+                          padding: '0.55rem 0.95rem', borderRadius: '0.5rem',
+                          border: `1px solid ${theme.border}`, background: '#ffffff',
+                          color: theme.textMuted, fontSize: '0.9rem', fontWeight: '600', cursor: 'pointer'
+                        }}
+                      >
+                        {copiedPatch ? 'Скопировано' : 'Копировать'}
+                      </button>
+                    </div>
+                    <div style={{ overflow: 'auto', maxHeight: '28rem', backgroundColor: '#F8FAFC' }}>
+                      {lines.map((line, idx) => {
+                        const look = diffLineStyle(line);
+                        return (
+                          <div key={idx} style={{ ...look, padding: '0 1rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: '0.82rem', lineHeight: '1.55', whiteSpace: 'pre', minWidth: 'max-content' }}>
+                            {line || ' '}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
 
           <div>
             <h2 style={{ fontSize: '1.35rem', fontWeight: '800', marginBottom: '1.5rem', color: theme.textMain }}>Полный отчет</h2>
