@@ -122,6 +122,19 @@ func (s *Service) Check(ctx context.Context, in task.CreateInput) (string, error
 	return t.CheckResult(), nil
 }
 
+// Find returns the newest analysis for the four fields and does not create one.
+func (s *Service) Find(ctx context.Context, in task.CreateInput) (task.Task, error) {
+	in, err := normalizeKey(in)
+	if err != nil {
+		return task.Task{}, err
+	}
+	id, err := s.store.LatestID(ctx, in.ComponentURL, in.Branch, in.CVEID, in.PackageName)
+	if err != nil {
+		return task.Task{}, err
+	}
+	return s.store.Get(ctx, id)
+}
+
 func normalizeKey(in task.CreateInput) (task.CreateInput, error) {
 	in.ComponentURL = gitrepo.CanonicalRepoURL(in.ComponentURL)
 	in.Branch = strings.TrimSpace(in.Branch)

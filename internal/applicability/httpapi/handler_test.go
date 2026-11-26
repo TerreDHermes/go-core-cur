@@ -27,6 +27,12 @@ func (f fakeSvc) Open(context.Context, task.CreateInput) (string, error) {
 func (f fakeSvc) Check(context.Context, task.CreateInput) (string, error) {
 	return task.CheckNotStarted, nil
 }
+func (f fakeSvc) Find(context.Context, task.CreateInput) (task.Task, error) {
+	if f.detail.ID == "" {
+		return task.Task{}, task.ErrNotFound
+	}
+	return f.detail, nil
+}
 func (f fakeSvc) List(context.Context, tasksvc.ListFilter) ([]task.Task, int, error) {
 	return []task.Task{{
 		ID: "1", Status: task.StatusPending, CVEID: "CVE-1",

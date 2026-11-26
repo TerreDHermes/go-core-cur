@@ -686,6 +686,39 @@ function paintQuietLink(node, active) {
   node.style.color = active ? '#fff' : theme.primary;
 }
 
+const MCP_SETTINGS = `"cve-verdict": {
+  "httpUrl": "http://d49.dev.k8s/api/v1/analysis/mcp",
+  "timeout": 180000
+}`;
+
+function copyToClipboard(value, onDone) {
+  const textArea = document.createElement('textarea');
+  textArea.value = value;
+  textArea.setAttribute('readonly', '');
+  textArea.style.position = 'fixed';
+  textArea.style.top = '0';
+  textArea.style.left = '0';
+  textArea.style.opacity = '0';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+  textArea.setSelectionRange(0, textArea.value.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (err) {
+    console.error('Failed to copy:', err);
+  }
+  document.body.removeChild(textArea);
+  if (ok) {
+    onDone();
+    return;
+  }
+  const write = navigator.clipboard?.writeText;
+  if (!write) return;
+  write.call(navigator.clipboard, value).then(onDone).catch((err) => console.error('Failed to copy:', err));
+}
+
 function SwaggerButton() {
   return (
     <a
@@ -790,6 +823,7 @@ export default function ApplicabilityAnalysis() {
   const [patchOpen, setPatchOpen] = useState(false);
   const [patchFile, setPatchFile] = useState(0);
   const [copiedPatch, setCopiedPatch] = useState(false);
+  const [copiedMCP, setCopiedMCP] = useState(false);
   const [createError, setCreateError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [taskList, setTaskList] = useState([]);
@@ -822,12 +856,13 @@ export default function ApplicabilityAnalysis() {
     setCopiedPatch(false);
   }, [taskId]);
 
-  const isReviewsView = location.pathname.includes('/reviews');
-  const isListView = !isReviewsView && location.pathname.includes('/list');
-  const isDetailView = !!taskId && !isListView && !isReviewsView;
+  const isMcpView = location.pathname.includes('/mcp') || taskId === 'mcp';
+  const isReviewsView = !isMcpView && location.pathname.includes('/reviews');
+  const isListView = !isMcpView && !isReviewsView && location.pathname.includes('/list');
+  const isDetailView = !!taskId && !isMcpView && !isListView && !isReviewsView;
 
   useEffect(() => {
-    if (isDetailView || isListView || isReviewsView) return undefined;
+    if (isDetailView || isListView || isReviewsView || isMcpView) return undefined;
     let cancelled = false;
     apiService.getDefaultModel()
       .then((model) => {
@@ -840,7 +875,7 @@ export default function ApplicabilityAnalysis() {
       })
       .catch((err) => console.error('Error loading Go version:', err));
     return () => { cancelled = true; };
-  }, [isDetailView, isListView, isReviewsView]);
+  }, [isDetailView, isListView, isReviewsView, isMcpView]);
 
   useEffect(() => {
     if (isListView) {
@@ -995,33 +1030,7 @@ export default function ApplicabilityAnalysis() {
     window.location.href = '/analysis';
   };
 
-  const copyText = (value, onDone) => {
-    const textArea = document.createElement('textarea');
-    textArea.value = value;
-    textArea.setAttribute('readonly', '');
-    textArea.style.position = 'fixed';
-    textArea.style.top = '0';
-    textArea.style.left = '0';
-    textArea.style.opacity = '0';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    textArea.setSelectionRange(0, textArea.value.length);
-    let ok = false;
-    try {
-      ok = document.execCommand('copy');
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    }
-    document.body.removeChild(textArea);
-    if (ok) {
-      onDone();
-      return;
-    }
-    const write = navigator.clipboard?.writeText;
-    if (!write) return;
-    write.call(navigator.clipboard, value).then(onDone).catch((err) => console.error('Failed to copy:', err));
-  };
+  const copyText = (value, onDone) => copyToClipboard(value, onDone);
 
   const handleCopyVerdict = async () => {
     const activeModule = currentTask?.modules?.[selectedModuleIndex];
@@ -1076,6 +1085,55 @@ export default function ApplicabilityAnalysis() {
   };
 
   const activeModule = currentTask?.modules?.[selectedModuleIndex];
+
+  if (isMcpView) {
+    return (
+      <div style={fullPageStyle}>
+        <div style={boardContainerStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1.5rem' }}>
+            <div>
+              <h1 style={{ margin: 0, fontSize: '2.25rem', fontWeight: '800', color: theme.textMain }}>MCP connect</h1>
+              <p style={{ margin: '0.5rem 0 0', color: theme.textMuted, fontSize: '1.1rem', maxWidth: '40rem' }}>
+                Гигакод при запуске спрашивает этот адрес, какие инструменты есть. Сервер называет четыре, и дальше Гигакод вызывает их сам.
+              </p>
+            </div>
+            <button onClick={() => window.location.href = '/analysis'} style={backBtnStyle} onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.5)'; e.currentTarget.style.borderColor = theme.primary; e.currentTarget.style.color = theme.primary; }} onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.borderColor = theme.borderDark; e.currentTarget.style.color = theme.textMuted; }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg>
+              Новый анализ
+            </button>
+          </div>
+
+          <div style={{ ...innerCardStyle, marginBottom: '1.5rem' }}>
+            <h2 style={{ margin: '0 0 1rem', fontSize: '1.2rem', fontWeight: '800', color: theme.textMain }}>Что появится у Гигакода</h2>
+            <ul style={{ margin: 0, paddingLeft: '1.2rem', color: theme.textMain, lineHeight: 1.7, fontSize: '1.05rem' }}>
+              <li>Запустить анализ применимости по адресу, ветке, уязвимости и пакету.</li>
+              <li>Получить результат этого анализа по тем же четырём полям.</li>
+              <li>Узнать карточку уязвимости по её id.</li>
+              <li>Получить патч уязвимости, если он найден.</li>
+            </ul>
+          </div>
+
+          <div style={innerCardStyle}>
+            <h2 style={{ margin: '0 0 0.75rem', fontSize: '1.2rem', fontWeight: '800', color: theme.textMain }}>Куда вставить</h2>
+            <p style={{ margin: '0 0 1rem', color: theme.textMain, fontSize: '1.05rem', lineHeight: 1.6 }}>
+              Открой <b>.gigacode/settings.json</b> в домашнем каталоге. В объект <b>mcpServers</b> добавь блок ниже. Если там уже есть другой сервер, поставь этот рядом, через запятую. Весь файл заменять не нужно. После сохранения перезапусти Гигакод.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={{ color: theme.textMuted, fontWeight: '700' }}>http://d49.dev.k8s/api/v1/analysis/mcp</span>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(MCP_SETTINGS, () => setCopiedMCP(true))}
+                style={{ ...listNavBtnStyle, backgroundColor: theme.primary, color: '#fff', borderColor: theme.primary }}
+              >
+                {copiedMCP ? 'Скопировано' : 'Скопировать'}
+              </button>
+            </div>
+            <pre style={{ margin: 0, padding: '1.25rem 1.5rem', overflow: 'auto', borderRadius: '0.75rem', background: '#0F172A', color: '#E2E8F0', fontSize: '0.95rem', lineHeight: 1.6 }}>{MCP_SETTINGS}</pre>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isReviewsView) {
     const totalPages = Math.ceil(reviewTotal / itemsPerPage) || 1;
@@ -1792,6 +1850,14 @@ export default function ApplicabilityAnalysis() {
             onMouseLeave={e => paintQuietLink(e.currentTarget, false)}
           >
             Отзывы
+          </a>
+          <a
+            href="/analysis/mcp"
+            style={quietLinkStyle}
+            onMouseEnter={e => paintQuietLink(e.currentTarget, true)}
+            onMouseLeave={e => paintQuietLink(e.currentTarget, false)}
+          >
+            MCP connect
           </a>
           <SwaggerButton />
         </div>

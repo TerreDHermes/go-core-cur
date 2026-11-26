@@ -19,9 +19,34 @@
     {
       "name": "cve",
       "description": "Карточка уязвимости и патч из CVE Patch Analyzer. Задачу анализа эти ручки не создают."
+    },
+    {
+      "name": "mcp",
+      "description": "Сообщения MCP для Гигакода. Четыре инструмента: запуск анализа, его результат, карточка уязвимости и патч."
     }
   ],
   "paths": {
+    "/api/v1/analysis/mcp": {
+      "post": {
+        "tags": ["mcp"],
+        "operationId": "mcp",
+        "summary": "MCP для Гигакода",
+        "description": "Один адрес, на который Гигакод шлёт сообщения JSON-RPC. Сервер сам называет четыре инструмента: `start_analysis` запускает анализ и сразу отвечает, `get_analysis` возвращает самый новый результат по четырём полям, `get_vulnerability` отдаёт карточку уязвимости, `get_patch` отдаёт diff или сообщает, что патча нет. Тот же обработчик слушает `POST /mcp`. Страница «MCP connect» показывает готовый блок для `.gigacode/settings.json`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "additionalProperties": true },
+              "example": { "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Ответ на сообщение: список инструментов или результат вызова." },
+          "202": { "description": "Уведомление без ответа, например notifications/initialized." }
+        }
+      }
+    },
     "/api/v1/analysis/cve/{id}/info": {
       "get": {
         "tags": ["cve"],
