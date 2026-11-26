@@ -41,9 +41,39 @@ func (c Client) attemptLimits() []time.Duration {
 	return []time.Duration{30 * time.Second, 50 * time.Second, time.Minute}
 }
 
+// Fetch loads the patch document and decodes the fields the analysis reads.
 func (c Client) Fetch(ctx context.Context, cveID string) (task.CVEPatch, error) {
+	doc, err := c.fetch(ctx, cveID)
+	if err != nil {
+		return task.CVEPatch{}, err
+	}
+	return doc.patch, nil
+}
+
+// FetchDocument loads the same upstream document and keeps its status and body.
+// A successful card is status 200 and the analyzer's JSON, including fields this
+// service does not decode. An error status from the analyzer is returned as-is.
+// Transport failures and the timeout ladder return an error and status 0.
+func (c Client) FetchDocument(ctx context.Context, cveID string) (int, []byte, error) {
+	doc, err := c.fetch(ctx, cveID)
+	if err != nil {
+		if doc.status != 0 {
+			return doc.status, doc.body, nil
+		}
+		return 0, nil, err
+	}
+	return doc.status, doc.body, nil
+}
+
+type document struct {
+	status int
+	body   []byte
+	patch  task.CVEPatch
+}
+
+func (c Client) fetch(ctx context.Context, cveID string) (document, error) {
 	if c.BaseURL == "" {
-		return task.CVEPatch{}, fmt.Errorf("cve patch base url is empty")
+		return document{}, fmt.Errorf("cve patch base url is empty")
 	}
 	pause := c.RetryPause
 	if pause <= 0 {
@@ -55,40 +85,42 @@ func (c Client) Fetch(ctx context.Context, cveID string) (task.CVEPatch, error) 
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return task.CVEPatch{}, err
+			return document{}, err
 		}
 		limit := limits[step]
-		patch, err := c.fetchAttempt(ctx, httpClient, cveID, limit)
-		if err == nil && !patch.NeedsPatchRetry() {
-			return patch, nil
+		doc, err := c.fetchAttempt(ctx, httpClient, cveID, limit)
+		if err == nil && !doc.patch.NeedsPatchRetry() {
+			return doc, nil
 		}
 		if ctx.Err() != nil {
-			return task.CVEPatch{}, ctx.Err()
+			return document{}, ctx.Err()
 		}
 		switch {
 		case err != nil && isAttemptTimeout(err):
 			if step == len(limits)-1 {
-				return task.CVEPatch{}, fmt.Errorf("cve patch %s: request timed out after %s: %w", cveID, limit, err)
+				return document{}, fmt.Errorf("cve patch %s: request timed out after %s: %w", cveID, limit, err)
 			}
 			step++
-		case isConnectionReset(err, patch):
+		case isConnectionReset(err, doc.patch):
 			step = 0
+		case err != nil && doc.status != 0:
+			return doc, err
 		case err != nil:
-			return task.CVEPatch{}, err
+			return document{}, err
 		default:
-			return task.CVEPatch{}, fmt.Errorf("cve patch %s: empty response", cveID)
+			return document{}, fmt.Errorf("cve patch %s: empty response", cveID)
 		}
 		timer := time.NewTimer(pause)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return task.CVEPatch{}, ctx.Err()
+			return document{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
 }
 
-func (c Client) fetchAttempt(ctx context.Context, httpClient *http.Client, cveID string, limit time.Duration) (task.CVEPatch, error) {
+func (c Client) fetchAttempt(ctx context.Context, httpClient *http.Client, cveID string, limit time.Duration) (document, error) {
 	attempt, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	return c.fetchOnce(attempt, httpClient, cveID)
@@ -121,27 +153,27 @@ func clientWithoutTimeout(c *http.Client) *http.Client {
 	return &clone
 }
 
-func (c Client) fetchOnce(ctx context.Context, httpClient *http.Client, cveID string) (task.CVEPatch, error) {
+func (c Client) fetchOnce(ctx context.Context, httpClient *http.Client, cveID string) (document, error) {
 	endpoint := c.BaseURL + "/cve/patch/" + url.PathEscape(cveID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return task.CVEPatch{}, err
+		return document{}, err
 	}
 	res, err := httpClient.Do(req)
 	if err != nil {
-		return task.CVEPatch{}, err
+		return document{}, err
 	}
 	defer res.Body.Close()
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return task.CVEPatch{}, err
+		return document{}, err
 	}
-	var patch task.CVEPatch
-	if err := json.Unmarshal(body, &patch); err != nil {
-		return task.CVEPatch{}, fmt.Errorf("cve patch %s: status %d: %w", cveID, res.StatusCode, err)
+	doc := document{status: res.StatusCode, body: body}
+	if err := json.Unmarshal(body, &doc.patch); err != nil {
+		return doc, fmt.Errorf("cve patch %s: status %d: %w", cveID, res.StatusCode, err)
 	}
-	if res.StatusCode != http.StatusOK && !patch.NeedsPatchRetry() {
-		return task.CVEPatch{}, fmt.Errorf("cve patch %s: status %d", cveID, res.StatusCode)
+	if res.StatusCode != http.StatusOK && !doc.patch.NeedsPatchRetry() {
+		return doc, fmt.Errorf("cve patch %s: status %d", cveID, res.StatusCode)
 	}
-	return patch, nil
+	return doc, nil
 }

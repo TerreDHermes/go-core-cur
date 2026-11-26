@@ -38,13 +38,26 @@ type Suggestions interface {
 	Branches(ctx context.Context, componentURL, query string) ([]gitrepo.BranchSuggestion, error)
 }
 
+// PatchDocuments loads a vulnerability card from CVE Patch Analyzer.
+// Status and body are the analyzer's own response. Status 0 means the call
+// did not produce one, and err explains why.
+type PatchDocuments interface {
+	FetchDocument(ctx context.Context, id string) (status int, body []byte, err error)
+}
+
 type Handler struct {
 	svc          Service
 	log          *slog.Logger
 	defaultModel string
 	listModels   func(context.Context) ([]string, error)
 	suggestions  Suggestions
+	patches      PatchDocuments
 	webBase      string
+}
+
+// UsePatches serves the vulnerability card and the patch through this handler.
+func (h *Handler) UsePatches(src PatchDocuments) {
+	h.patches = src
 }
 
 // UseModels serves the env model and the upstream model list. The token stays on the server.
@@ -83,6 +96,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/analysis/projects", h.projectSuggestions)
 	mux.HandleFunc("GET /api/v1/analysis/branches", h.branchSuggestions)
 	mux.HandleFunc("GET /api/v1/analysis/reviews", h.reviews)
+	mux.HandleFunc("GET /api/v1/analysis/cve/{id}/patch", h.cvePatch)
+	mux.HandleFunc("GET /api/v1/analysis/cve/{id}/info", h.cveCard)
 	mux.HandleFunc("GET /api/v1/analysis/{id}", h.get)
 	mux.HandleFunc("POST /api/v1/analysis/{id}/review", h.setReview)
 	mux.HandleFunc("POST /api/v1/analysis/{id}/cancel", h.cancel)

@@ -34,8 +34,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	defer st.Close()
 
 	aiClient := ai.NewAIClient(cfg.AIBaseURL, cfg.AIToken, cfg.AIModel)
+	patches := cveapi.New(cfg.CVEPatchBase)
 	pool := worker.New(st, gitrepo.Client{Token: cfg.GitToken}, scan.Client{
-		Patches: cveapi.New(cfg.CVEPatchBase),
+		Patches: patches,
 		AI:      aiClient,
 	}, cfg.WorkerCount, cfg.QueueSize, cfg.GitTimeout, log)
 	svc := tasksvc.New(st, pool)
@@ -44,6 +45,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	mux := http.NewServeMux()
 	h := httpapi.NewHandler(svc, log)
 	h.UseModels(cfg.AIModel, aiClient.ListModels)
+	h.UsePatches(patches)
 	h.UseSuggestions(gitrepo.NewCatalog(cfg.GitToken, cfg.GitSuggestRoot))
 	h.UseWebBase(cfg.WebBaseURL)
 	h.Register(mux)

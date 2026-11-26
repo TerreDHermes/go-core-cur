@@ -151,6 +151,45 @@ func TestFetchTimeoutThenResetRestartsAtShortLimit(t *testing.T) {
 	}
 }
 
+func TestFetchDocumentKeepsAnalyzerBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cve/patch/GHSA-1" {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"cve":"GHSA-1","files":[{"filename":"a.go","patch":"diff","extra":true}],"vendor_note":"keep"}`))
+	}))
+	defer srv.Close()
+
+	status, body, err := (Client{
+		BaseURL:    srv.URL,
+		HTTP:       srv.Client(),
+		RetryPause: time.Millisecond,
+	}).FetchDocument(context.Background(), "GHSA-1")
+	if err != nil || status != http.StatusOK {
+		t.Fatal(status, err)
+	}
+	if !strings.Contains(string(body), `"vendor_note":"keep"`) || !strings.Contains(string(body), `"extra":true`) {
+		t.Fatal(string(body))
+	}
+}
+
+func TestFetchDocumentPassesAnalyzerStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"unknown id"}`))
+	}))
+	defer srv.Close()
+
+	status, body, err := (Client{
+		BaseURL:    srv.URL,
+		HTTP:       srv.Client(),
+		RetryPause: time.Millisecond,
+	}).FetchDocument(context.Background(), "CVE-missing")
+	if err != nil || status != http.StatusNotFound || !strings.Contains(string(body), "unknown id") {
+		t.Fatal(status, err, string(body))
+	}
+}
+
 func TestFetchOtherErrorDoesNotRetry(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -15,9 +15,107 @@
     {
       "name": "analysis",
       "description": "Задачи анализа применимости"
+    },
+    {
+      "name": "cve",
+      "description": "Карточка уязвимости и патч из CVE Patch Analyzer. Задачу анализа эти ручки не создают."
     }
   ],
   "paths": {
+    "/api/v1/analysis/cve/{id}/info": {
+      "get": {
+        "tags": ["cve"],
+        "operationId": "getCVE",
+        "summary": "Карточка уязвимости",
+        "description": "Зеркало `GET /cve/patch/{id}` сервиса CVE Patch Analyzer. Тело и код ответа передаются как есть, включая поля, которые анализ сам не читает. Обрыв соединения и сообщение с `403` повторяются, таймаут растягивается на 30 секунд, затем на 50 и на минуту. Задача анализа не создаётся.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Идентификатор, который понимает CVE Patch Analyzer: CVE, GHSA или GO.",
+            "schema": { "type": "string", "example": "CVE-2024-0001" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Карточка в том виде, в каком её отдал анализатор",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CVECard" }
+              }
+            }
+          },
+          "502": {
+            "description": "Сервис патчей не ответил",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "504": {
+            "description": "Сервис патчей не ответил за три попытки",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analysis/cve/{id}/patch": {
+      "get": {
+        "tags": ["cve"],
+        "operationId": "getCVEPatch",
+        "summary": "Патч уязвимости",
+        "description": "Та же карточка, но наружу уходят только файлы, в которых есть текст патча. Если карточка нашлась, а таких файлов нет, ответ `404`. Если анализатор сам ответил ошибкой, наружу уходят его код и тело. Повторы те же, что у карточки. Задача анализа не создаётся.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "example": "CVE-2024-0001" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Файлы патча",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CVEPatchFiles" }
+              }
+            }
+          },
+          "404": {
+            "description": "Карточка есть, патча в ней нет",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" },
+                "example": { "error": "патч для CVE-2024-0001 не найден" }
+              }
+            }
+          },
+          "502": {
+            "description": "Сервис патчей не ответил",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "504": {
+            "description": "Сервис патчей не ответил за три попытки",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/analysis/default-model": {
       "get": {
         "tags": ["analysis"],
@@ -925,6 +1023,43 @@
         "required": ["error"],
         "properties": {
           "error": { "type": "string" }
+        }
+      },
+      "CVECard": {
+        "type": "object",
+        "description": "Тело GET /cve/patch/{id} сервиса CVE Patch Analyzer без изменений. Лишние поля анализатора сохраняются.",
+        "additionalProperties": true,
+        "properties": {
+          "cve": { "type": "string", "example": "CVE-2024-0001" },
+          "description": { "type": "string" },
+          "description_ru": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "fix_url": { "type": "string" },
+          "message": { "type": "string" },
+          "fixed_versions": { "type": "array", "items": { "type": "string" } },
+          "files": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/CVEPatchFile" }
+          }
+        }
+      },
+      "CVEPatchFile": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "filename": { "type": "string", "example": "ssh/handshake.go" },
+          "patch": { "type": "string", "example": "diff --git a/ssh/handshake.go" }
+        }
+      },
+      "CVEPatchFiles": {
+        "type": "object",
+        "required": ["cve", "files"],
+        "properties": {
+          "cve": { "type": "string", "example": "CVE-2024-0001" },
+          "files": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/CVEPatchFile" }
+          }
         }
       }
     },
