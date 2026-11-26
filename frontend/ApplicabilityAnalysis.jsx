@@ -686,10 +686,12 @@ function paintQuietLink(node, active) {
   node.style.color = active ? '#fff' : theme.primary;
 }
 
-const MCP_SETTINGS = `"cve-verdict": {
-  "httpUrl": "http://d49.dev.k8s/api/v1/analysis/mcp",
-  "timeout": 180000
-}`;
+const MCP_SETTINGS = `"mcpServers": {
+        "cve-verdict": {
+                "httpUrl": "http://d49.dev.k8s:3000/api/v1/analysis/mcp",
+                "timeout": 180000
+        }
+ },`;
 
 function copyToClipboard(value, onDone) {
   const textArea = document.createElement('textarea');
@@ -1116,10 +1118,10 @@ export default function ApplicabilityAnalysis() {
           <div style={innerCardStyle}>
             <h2 style={{ margin: '0 0 0.75rem', fontSize: '1.2rem', fontWeight: '800', color: theme.textMain }}>Куда вставить</h2>
             <p style={{ margin: '0 0 1rem', color: theme.textMain, fontSize: '1.05rem', lineHeight: 1.6 }}>
-              Открой <b>.gigacode/settings.json</b> в домашнем каталоге. В объект <b>mcpServers</b> добавь блок ниже. Если там уже есть другой сервер, поставь этот рядом, через запятую. Весь файл заменять не нужно. После сохранения перезапусти Гигакод.
+              Открой <b>.gigacode/settings.json</b> в домашнем каталоге. Если объекта <b>mcpServers</b> ещё нет, вставь блок ниже целиком. Если он уже есть, добавь внутрь только <b>cve-verdict</b> и не затирай соседние серверы. Весь файл заменять не нужно. После сохранения перезапусти Гигакод.
             </p>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-              <span style={{ color: theme.textMuted, fontWeight: '700' }}>http://d49.dev.k8s/api/v1/analysis/mcp</span>
+              <span style={{ color: theme.textMuted, fontWeight: '700' }}>http://d49.dev.k8s:3000/api/v1/analysis/mcp</span>
               <button
                 type="button"
                 onClick={() => copyToClipboard(MCP_SETTINGS, () => setCopiedMCP(true))}
@@ -1529,22 +1531,20 @@ export default function ApplicabilityAnalysis() {
             const lines = diffLines(activePatch?.patch);
             return (
               <div style={{ marginBottom: '2.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: patchOpen ? '1.25rem' : 0, flexWrap: 'wrap' }}>
-                  <h2 style={{ fontSize: '1.35rem', fontWeight: '800', margin: 0, color: theme.textMain }}>Патч</h2>
-                  <button
-                    type="button"
-                    onClick={() => { setPatchOpen((open) => !open); setCopiedPatch(false); }}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-                      padding: '0.6rem 1.25rem', borderRadius: '0.75rem',
-                      border: `1px solid ${theme.primary}`, background: patchOpen ? '#ffffff' : theme.primary,
-                      color: patchOpen ? theme.primary : '#ffffff', fontSize: '0.95rem', fontWeight: '700',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {patchOpen ? 'Свернуть патч' : 'Показать патч'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => { setPatchOpen((open) => !open); setCopiedPatch(false); }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                    marginBottom: patchOpen ? '1.25rem' : 0,
+                    padding: '0.6rem 1.25rem', borderRadius: '0.75rem',
+                    border: `1px solid ${theme.primary}`, background: patchOpen ? '#ffffff' : theme.primary,
+                    color: patchOpen ? theme.primary : '#ffffff', fontSize: '0.95rem', fontWeight: '700',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {patchOpen ? 'Свернуть патч' : 'Показать патч'}
+                </button>
                 {patchOpen && (patchFiles.length === 0 ? (
                   <div style={{ padding: '2.5rem', textAlign: 'center', color: theme.textMuted, fontWeight: '600', border: `2px dashed ${theme.border}`, borderRadius: '1rem', backgroundColor: 'rgba(255,255,255,0.4)' }}>
                     Патч не найден
