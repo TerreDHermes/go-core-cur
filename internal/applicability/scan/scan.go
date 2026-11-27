@@ -48,8 +48,10 @@ type Explainer interface {
 // A remaining edit that does not carry the fix counts when the model quotes that edit.
 // Three or more files that missed every fragment of two or more skip that call.
 // A file with one missed fragment does not count toward those three. Up to four
-// such files are still asked. A function the patch deletes and the file no longer
-// has is not sent to deadcode.
+// such files are still asked. A hunk without a function name takes that name
+// from the func above its lines in the file. A package missing from go.mod still
+// reaches that check when those lines sit in a Go file. A function the patch
+// deletes and the file no longer has is not sent to deadcode.
 // The deterministic text stays in Report.PreVerdict. Explain replaces Verdict and fills Narrative.
 func Scan(ctx context.Context, in Input, patches PatchSource, explain Explainer) ([]task.ModuleResult, error) {
 	note(ctx, "чтение заметок")
@@ -182,7 +184,7 @@ func analyzeModule(ctx context.Context, in Input, patch task.CVEPatch, mod match
 	report.PatchFiles = matches
 	report.FoundPatchFiles = foundPaths(matches)
 	verdict := verdictPatchFiles(in, mod.GoModPath, report.FoundPatchFiles)
-	verdict += attachReach(ctx, in.RepoPath, patch, &report)
+	verdict += attachReach(ctx, in.RepoPath, patch, &report, explain)
 	result := task.ModuleResult{
 		GoModPath: mod.GoModPath,
 		Verdict:   verdict,
@@ -276,17 +278,17 @@ func rootHit(ctx context.Context, repoPath string, patch task.CVEPatch, explicit
 	if !explicit {
 		verdict = verdictExtraRoot(found)
 	}
-	verdict += attachReach(ctx, repoPath, patch, &report)
+	verdict += attachReach(ctx, repoPath, patch, &report, explain)
 	result := task.ModuleResult{GoModPath: ".", Verdict: verdict, ReportMD: report}
 	result.Verdict += noteAppliedPatchReviewed(ctx, explain, repoPath, patch.Files, &result.ReportMD)
 	return result, true
 }
 
-func attachReach(ctx context.Context, repoPath string, patch task.CVEPatch, report *task.Report) string {
+func attachReach(ctx context.Context, repoPath string, patch task.CVEPatch, report *task.Report, explain Explainer) string {
 	if !patchFileFound(*report) {
 		return ""
 	}
-	report.Reach = analyzeReach(ctx, repoPath, patch.Files, report.PatchFiles)
+	report.Reach = analyzeReach(withReachExplain(ctx, explain), repoPath, patch.Files, report.PatchFiles)
 	return reachFacts(report.Reach)
 }
 
@@ -314,6 +316,13 @@ func searchAbsent(ctx context.Context, in Input, patch task.CVEPatch, explain Ex
 		}
 	}
 	applyGrep(&result, ev)
+	if len(patch.Files) > 0 {
+		if matches := locateGoByAnchors(in.RepoPath, patch.Files); len(matches) > 0 {
+			result.ReportMD.PatchFiles = matches
+			result.ReportMD.FoundPatchFiles = foundPaths(matches)
+			result.Verdict += attachReach(ctx, in.RepoPath, patch, &result.ReportMD, explain)
+		}
+	}
 	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return finish(ctx, in, []task.ModuleResult{result}, explain, notes)
 }

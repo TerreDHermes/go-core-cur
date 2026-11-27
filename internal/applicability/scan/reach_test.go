@@ -252,6 +252,142 @@ func TestOneDeadcodeRunCoversEverySymbol(t *testing.T) {
 	}
 }
 
+func TestHunkWithoutFuncNameUsesEnclosingFunction(t *testing.T) {
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{
+			"golang.org/x/net/html.childTextNodesAreLiteral": {},
+		}}
+	})
+	defer restore()
+
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n\nrequire golang.org/x/net v0.1.0\n")
+	body := "package html\n\nfunc other() {\n\treturn false\n}\n\nfunc childTextNodesAreLiteral(n *Node) bool {\n\tif n.Namespace != \"\" {\n\t\treturn false\n\t}\n\tswitch n.Data {\n\tcase \"iframe\", \"noembed\", \"noframes\", \"noscript\", \"plaintext\", \"script\", \"style\", \"xmp\":\n\t\tfor p := n.Parent; p != nil; p = p.Parent {\n\t\t\tif p.Namespace != \"\" {\n\t\t\t\tif !htmlIntegrationPoint(p) {\n\t\t\t\t\treturn false\n\t\t\t\t}\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t\treturn true\n\tdefault:\n\t\treturn false\n\t}\n}\n"
+	rel := "vendor/golang.org/x/net/html/render.go"
+	mustWrite(t, filepath.Join(root, rel), body)
+	diff := "@@ -246,18 +246,17 @@\n" +
+		" \tswitch n.Data {\n" +
+		" \tcase \"iframe\", \"noembed\", \"noframes\", \"noscript\", \"plaintext\", \"script\", \"style\", \"xmp\":\n" +
+		"-\t\tfor p := n.Parent; p != nil; p = p.Parent {\n" +
+		"-\t\t\tif p.Namespace != \"\" {\n" +
+		"-\t\t\t\tif !htmlIntegrationPoint(p) {\n" +
+		"-\t\t\t\t\treturn false\n" +
+		"-\t\t\t\t}\n" +
+		"-\t\t\t\tbreak\n" +
+		"+\t\tfor c, p := n, n.Parent; p != nil; c, p = p, p.Parent {\n" +
+		"+\t\t\tif p.Namespace != \"\" && p.Namespace != c.Namespace && !htmlIntegrationPoint(p) {\n" +
+		"+\t\t\t\treturn false\n" +
+		" \t\t\t}\n" +
+		" \t\t}\n"
+	report := analyzeReach(context.Background(), root, []task.PatchFile{{
+		Filename: "html/render.go",
+		Patch:    diff,
+	}}, []task.PatchFileMatch{{
+		Filename: "html/render.go",
+		Found:    true,
+		Path:     "./" + rel,
+	}})
+	if report.Reachable == nil || *report.Reachable {
+		t.Fatal(report.Reachable, report.Detail)
+	}
+	if len(report.Functions) != 1 || !strings.Contains(report.Functions[0].Symbol, "childTextNodesAreLiteral") || strings.Contains(report.Functions[0].Symbol, "other") {
+		t.Fatalf("%+v", report.Functions)
+	}
+}
+
+func TestAbsentPackageStillChecksGoFile(t *testing.T) {
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{
+			"golang.org/x/net/html.childTextNodesAreLiteral": {},
+		}}
+	})
+	defer restore()
+
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/dapp\n\nrequire golang.org/x/net v0.1.0\n")
+	body := "package html\n\nfunc childTextNodesAreLiteral(n *Node) bool {\n\tfor p := n.Parent; p != nil; p = p.Parent {\n\t\tif p.Namespace != \"\" {\n\t\t\tif !htmlIntegrationPoint(p) {\n\t\t\t\treturn false\n\t\t\t}\n\t\t}\n\t}\n\treturn true\n}\n"
+	mustWrite(t, filepath.Join(root, "vendor", "golang.org", "x", "net", "html", "render.go"), body)
+	mustWrite(t, filepath.Join(root, "charts", "job.yaml"), "namespace: Parent\nhtmlIntegrationPoint: true\n")
+	mustWrite(t, filepath.Join(root, "other.go"), "package main\n\nfunc main() {\n\treturn false\n}\n")
+	diff := "@@ -10,6 +10,5 @@\n" +
+		"-for p := n.Parent; p != nil; p = p.Parent {\n" +
+		"-if p.Namespace != \"\" {\n" +
+		"-if !htmlIntegrationPoint(p) {\n" +
+		"+for c, p := n, n.Parent; p != nil; c, p = p, p.Parent {\n" +
+		"+if p.Namespace != \"\" && p.Namespace != c.Namespace && !htmlIntegrationPoint(p) {\n"
+	ai := &captureAI{}
+	got, err := Scan(context.Background(), Input{
+		RepoPath:     root,
+		ComponentURL: "https://example.com/dapp-jobset",
+		CVEID:        "GO-2026-6866",
+		PackageName:  "golang.org/x/net/html",
+	}, fakePatch{cve: "GO-2026-6866", files: []task.PatchFile{{
+		Filename: "html/render.go",
+		Patch:    diff,
+	}}}, ai)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reach := got[0].ReportMD.Reach
+	if got[0].ReportMD.Stage != task.StagePackageAbsent || reach == nil || reach.Reachable == nil || *reach.Reachable {
+		t.Fatalf("stage %s reach %+v", got[0].ReportMD.Stage, reach)
+	}
+	if len(got[0].ReportMD.PatchFiles) != 1 || !strings.HasSuffix(got[0].ReportMD.PatchFiles[0].Path, "vendor/golang.org/x/net/html/render.go") {
+		t.Fatal(got[0].ReportMD.PatchFiles)
+	}
+	if got[0].Applicability != task.NotApplicable {
+		t.Fatal(got[0].Applicability)
+	}
+	if !strings.Contains(ai.prompts[0], "неприменима") || !strings.Contains(ai.prompts[0], "недостижим из main") || strings.Contains(ai.prompts[0], "выбери «применима»") {
+		t.Fatal(ai.prompts[0])
+	}
+}
+
+func TestModelNamesFuncOnlyFromTheFile(t *testing.T) {
+	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {
+		return moduleDeadcode{Status: "ok", Dead: map[string]struct{}{
+			"example.com/app/html.childTextNodesAreLiteral": {},
+		}}
+	})
+	defer restore()
+
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module example.com/app\n")
+	body := "package html\n\nfunc childTextNodesAreLiteral(n *Node) bool {\n\treturn true\n}\n\nfunc other() bool {\n\treturn false\n}\n"
+	rel := "html/render.go"
+	mustWrite(t, filepath.Join(root, rel), body)
+	diff := "@@ -1,3 +1,2 @@\n" +
+		"-for p := n.Parent; p != nil; p = p.Parent {\n" +
+		"-if !htmlIntegrationPoint(p) {\n" +
+		"+for c, p := n, n.Parent; p != nil; c, p = p, p.Parent {\n"
+	files := []task.PatchFile{{Filename: "html/render.go", Patch: diff}}
+	match := []task.PatchFileMatch{{Filename: "html/render.go", Found: true, Path: "./" + rel}}
+	line := "func childTextNodesAreLiteral(n *Node) bool {"
+	ctx := withReachExplain(context.Background(), quoteAI{line: line})
+	report := analyzeReach(ctx, root, files, match)
+	if len(report.Functions) != 1 || !strings.Contains(report.Functions[0].Symbol, "childTextNodesAreLiteral") {
+		t.Fatalf("%+v detail %s", report.Functions, report.Detail)
+	}
+
+	bad := analyzeReach(withReachExplain(context.Background(), quoteAI{line: "func missing() bool {"}), root, files, match)
+	if len(bad.Functions) != 0 || bad.Reachable != nil {
+		t.Fatalf("%+v %v", bad.Functions, bad.Reachable)
+	}
+	both := "func childTextNodesAreLiteral(n *Node) bool {\nfunc other() bool {"
+	mixed := analyzeReach(withReachExplain(context.Background(), quoteAI{line: both}), root, files, match)
+	if len(mixed.Functions) != 0 {
+		t.Fatal(mixed.Functions)
+	}
+}
+
+type quoteAI struct {
+	line string
+}
+
+func (q quoteAI) Explain(context.Context, string) (string, error) {
+	return q.line, nil
+}
+
 func TestDeletedPatchFuncIsNotTreatedAsLive(t *testing.T) {
 	calls := 0
 	restore := stubModuleDeadcode(t, func(context.Context, string, bool) moduleDeadcode {

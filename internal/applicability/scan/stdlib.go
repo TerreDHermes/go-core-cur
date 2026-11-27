@@ -485,7 +485,7 @@ func analyzeStdlibModule(ctx context.Context, in Input, patch task.CVEPatch, rel
 	report.FoundPatchFiles = foundPaths(matches)
 	ctx = withStdlib(ctx, stdlibRun{ModuleDir: moduleDir, Toolchain: release.Toolchain, Goroot: goroot})
 	verdict := withAssumed(verdictStdlibFiles(release.Toolchain, report.FoundPatchFiles), release)
-	verdict += attachReach(ctx, in.RepoPath, patch, &report)
+	verdict += attachReach(ctx, in.RepoPath, patch, &report, explain)
 	result := task.ModuleResult{GoModPath: goModPath, Verdict: verdict, ReportMD: report}
 	result.Verdict += noteAppliedPatchReviewed(ctx, explain, in.RepoPath, patch.Files, &result.ReportMD)
 	return result, nil
